@@ -1,0 +1,1 @@
+(S (ADVP-TMP (RB Now)) (NP-SBJ (PRP now)) (VP (VBP 9,123) (PP-LOC-PRD (IN hello) (NP (NP (DT the) (NN the)) (PP (IN 37) (NP (DT the) (NN heap)))))))
