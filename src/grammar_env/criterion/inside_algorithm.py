@@ -185,16 +185,35 @@ def __backtrack_one(
         nt: int, i: int, j: int
 ) -> tuple[int, int]:
     R: int = X.shape[0]
-    for r in range(R):
-        if X[r] == nt:
-            for s in range(i, j):
-                if np.isclose(pi[nt, i, j], pi[Y[r], i, s] + pi[Z[r], s + 1, j] + log_prob[r]):
-                    return r, s
+    
+    # Find all indices where X[r] == nt
+    valid_r = np.where(X == nt)[0]
 
-    assert False, (
+    if valid_r.size == 0:
+        raise AssertionError(f"No valid r found for nt={nt}")
+
+    # Generate all possible s values
+    s_range = np.arange(i, j)
+
+    # Compute possible values for comparison
+    pi_nt_ij = pi[nt, i, j]
+    pi_values = pi[Y[valid_r], i, s_range[:, None]] + pi[Z[valid_r], s_range[:, None] + 1, j] + log_prob[valid_r]
+
+    # Check for matches using np.isclose
+    matches = np.isclose(pi_nt_ij, pi_values)
+
+    # Find the first match
+    match_indices = np.argwhere(matches)
+    if match_indices.size > 0:
+        r_idx, s_idx = match_indices[0]
+        return valid_r[r_idx], s_range[s_idx]
+
+    # If no match is found, raise an error
+    raise AssertionError(
         f"Backtrack failed for nt={nt}, i={i}, j={j}, pi[nt, i, j]: {pi[nt, i, j]}, "
         f"pi={pi[:, i:j + 1, i:j + 1]}, X: {X}, Y: {Y}, Z: {Z}, prob: {log_prob}"
     )
+
 
 
 # @njit
