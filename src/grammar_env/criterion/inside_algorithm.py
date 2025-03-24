@@ -197,42 +197,71 @@ def __backtrack_one(
     )
 
 
+# @njit
+# def __backtrack(
+#         pi: np.ndarray, X: np.ndarray, Y: np.ndarray, Z: np.ndarray, log_prob: np.ndarray,
+#         nt: int, i: int, j: int
+# ) -> list[tuple[int, int, int]]:
+#     """
+#     Backtrack the parse tree.
+#     :param pi: pi of the inside algorithm
+#             np.ndarray of shape (num_nt + num_pt, max_sentence_length, max_sentence_length)
+#     :param X: non-terminal index X of the rule X -> Y Z [prob]
+#     :param Y: non-terminal index Y of the rule X -> Y Z [prob]
+#     :param Z: non-terminal index Z of the rule X -> Y Z [prob]
+#     :param log_prob: probability of the rule X -> Y Z [prob]
+#     :param nt: non-terminal index to backtrack
+#     :param i: left sentence index to backtrack
+#     :param j: right sentence index to backtrack
+#     :return: list of spans of the parse tree
+#     """
+#     assert len(pi.shape) == 3, f"pi must be a 3d array, got {pi.shape}"
+#     assert i <= j, f"i must be less than or equal to j, got i={i}, j={j}"
+
+#     spans: list[tuple[int, int, int]] = []
+#     stack: list[tuple[int, int, int]] = [(nt, i, j)]
+#     while stack:
+#         nt, i, j = stack.pop()
+#         if i == j:
+#             continue
+#         if pi[nt, i, j].item() == float('-inf'):
+#             continue
+
+#         r, s =  __backtrack_one(pi, X, Y, Z, log_prob, nt, i, j)
+
+#         spans.append((nt, i, j))
+#         stack.append((Z[r].item(), s + 1, j))
+#         stack.append((Y[r].item(), i, s))
+
+#     return spans
+
 @njit
 def __backtrack(
-        pi: np.ndarray, X: np.ndarray, Y: np.ndarray, Z: np.ndarray, log_prob: np.ndarray,
-        nt: int, i: int, j: int
+    pi: np.ndarray, X: np.ndarray, Y: np.ndarray, Z: np.ndarray, log_prob: np.ndarray,
+    nt: int, i: int, j: int
 ) -> list[tuple[int, int, int]]:
     """
     Backtrack the parse tree.
-    :param pi: pi of the inside algorithm
-            np.ndarray of shape (num_nt + num_pt, max_sentence_length, max_sentence_length)
-    :param X: non-terminal index X of the rule X -> Y Z [prob]
-    :param Y: non-terminal index Y of the rule X -> Y Z [prob]
-    :param Z: non-terminal index Z of the rule X -> Y Z [prob]
-    :param log_prob: probability of the rule X -> Y Z [prob]
-    :param nt: non-terminal index to backtrack
-    :param i: left sentence index to backtrack
-    :param j: right sentence index to backtrack
-    :return: list of spans of the parse tree
     """
     assert len(pi.shape) == 3, f"pi must be a 3d array, got {pi.shape}"
     assert i <= j, f"i must be less than or equal to j, got i={i}, j={j}"
-
-    spans: list[tuple[int, int, int]] = []
-    stack: list[tuple[int, int, int]] = [(nt, i, j)]
+    spans = []
+    stack = [(nt, i, j)]
+    
+    # Define negative infinity as a constant that Numba can handle
+    NEG_INF = np.NINF  # Use NumPy's negative infinity constant
+    
     while stack:
         nt, i, j = stack.pop()
         if i == j:
             continue
-        if pi[nt, i, j].item() == float('-inf'):
+        # Compare with the NumPy constant instead of using float('-inf')
+        if pi[nt, i, j] == NEG_INF:
             continue
-
         r, s = __backtrack_one(pi, X, Y, Z, log_prob, nt, i, j)
-
         spans.append((nt, i, j))
-        stack.append((Z[r].item(), s + 1, j))
-        stack.append((Y[r].item(), i, s))
-
+        stack.append((int(Z[r]), s + 1, j))
+        stack.append((int(Y[r]), i, s))
     return spans
 
 
