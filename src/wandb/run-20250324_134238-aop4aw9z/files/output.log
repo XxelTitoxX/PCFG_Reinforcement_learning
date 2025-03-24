@@ -1,0 +1,56 @@
+/home/edgarduc/miniconda3/envs/learning-pcfg/lib/python3.11/site-packages/torch/cuda/__init__.py:129: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 11070). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:109.)
+  return torch._C._cuda_getDeviceCount() > 0
+03/24/2025 13:42:38 [WARNING] device -- device cuda:0 is not in available devices ['cpu'], using cpu instead
+03/24/2025 13:42:41 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 13:42:41 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 13:42:42 [INFO] grammar_env.grammar_env -- Environment initialized with 1000 max productions, BinaryGrammarFactory(num_nt=4, num_pt=14, num_rhs=324, num_r=1296) binary grammar factory.
+03/24/2025 13:42:42 [INFO] actor_critic -- ActorCritic initialized with 1,857,809 parameters, state_dim=1296, action_dim=1296, hidden_dim=512, n_layer=3
+03/24/2025 13:42:43 [INFO] ppo -- PPO initialized with persistent_dir: log/4_1000_20250324_134214, device: cpu, config: PPOConfig(num_non_terminals=4, max_productions=1000, criterion='f1', num_sentences_per_score=256, num_sentences_per_batch=256, episodes_per_batch=8, n_updates_per_iteration=10, lr=0.0002, gamma=0.99, clip=0.2, actor_weight=1.0, critic_weight=0.5, entropy_weight=0.01, save_freq=20, seed=0, min_ep_rews_threshold=0.0, hidden_dim=512, n_layer=3)
+
+03/24/2025 13:42:43 [INFO] ppo -- Learning... Running 1000 timesteps per episode, 8 episodes per batch for a total of 10000000 timesteps
+/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py:86: UserWarning: index_reduce() is in beta and the API may change at any time. (Triggered internally at /pytorch/aten/src/ATen/native/TensorAdvancedIndexing.cpp:1218.)
+  aggregated_full = aggregated_full.index_reduce(dim=1, index=rule_X, source=aggregated, reduce="amax")
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/edgarduc/miniconda3/envs/learning-pcfg/lib/python3.11/cProfile.py", line 191, in <module>
+    main()
+  File "/home/edgarduc/miniconda3/envs/learning-pcfg/lib/python3.11/cProfile.py", line 180, in main
+    runctx(code, globs, None, options.outfile, options.sort)
+  File "/home/edgarduc/miniconda3/envs/learning-pcfg/lib/python3.11/cProfile.py", line 20, in runctx
+    return _pyprofile._Utils(Profile).runctx(statement, globals, locals,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/miniconda3/envs/learning-pcfg/lib/python3.11/profile.py", line 63, in runctx
+    prof.runctx(statement, globals, locals)
+  File "/home/edgarduc/miniconda3/envs/learning-pcfg/lib/python3.11/cProfile.py", line 101, in runctx
+    exec(cmd, globals, locals)
+  File "train.py", line 94, in <module>
+    train(name, persistent_dir, args, ppo_config)
+  File "train.py", line 36, in train
+    ppo.learn(args.timesteps)
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/ppo.py", line 222, in learn
+    buffer: RolloutBuffer = self.rollout()
+                            ^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/ppo.py", line 340, in rollout
+    obs, rew = self.env.step((action.item(), 1.))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/grammar_env.py", line 84, in step
+    cur_score: float = self.criterion.score(
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/criterion.py", line 131, in score
+    scores_list: list[torch.Tensor] = [
+                                      ^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/criterion.py", line 132, in <listcomp>
+    self.score_sentence(
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/f1_criterion.py", line 41, in score_sentence
+    spans: list[list[tuple[int, int, int]]] = parse_sentences(
+                                              ^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py", line 251, in parse_sentences
+    pi: torch.Tensor = __inside_algorithm(
+                       ^^^^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py", line 148, in __inside_algorithm
+    __calculate_dp(
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py", line 80, in __calculate_dp
+    aggregated: torch.Tensor = mul_prob_lr.amax(dim=2)
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

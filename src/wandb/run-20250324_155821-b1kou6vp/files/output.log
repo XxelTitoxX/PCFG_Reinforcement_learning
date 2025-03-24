@@ -1,0 +1,7 @@
+03/24/2025 15:58:28 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 15:58:29 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 15:58:29 [INFO] grammar_env.grammar_env -- Environment initialized with 1000 max productions, BinaryGrammarFactory(num_nt=4, num_pt=14, num_rhs=324, num_r=1296) binary grammar factory.
+03/24/2025 15:58:29 [INFO] actor_critic -- ActorCritic initialized with 1,857,809 parameters, state_dim=1296, action_dim=1296, hidden_dim=512, n_layer=3
+03/24/2025 15:58:29 [INFO] ppo -- PPO initialized with persistent_dir: log/4_1000_20250324_155759, device: cuda:0, config: PPOConfig(num_non_terminals=4, max_productions=1000, criterion='f1', num_sentences_per_score=256, num_sentences_per_batch=256, episodes_per_batch=8, n_updates_per_iteration=10, lr=0.0002, gamma=0.99, clip=0.2, actor_weight=1.0, critic_weight=0.5, entropy_weight=0.01, save_freq=20, seed=0, min_ep_rews_threshold=0.0, hidden_dim=512, n_layer=3)
+03/24/2025 15:58:29 [INFO] ppo -- Learning... Running 1000 timesteps per episode, 8 episodes per batch for a total of 10000000 timesteps
+/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py:86: UserWarning: index_reduce() is in beta and the API may change at any time. (Triggered internally at ../aten/src/ATen/native/cuda/Indexing.cu:1047.)

@@ -1,0 +1,35 @@
+03/24/2025 14:30:20 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 14:30:20 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 14:30:20 [INFO] grammar_env.grammar_env -- Environment initialized with 1000 max productions, BinaryGrammarFactory(num_nt=4, num_pt=14, num_rhs=324, num_r=1296) binary grammar factory.
+03/24/2025 14:30:20 [INFO] actor_critic -- ActorCritic initialized with 1,857,809 parameters, state_dim=1296, action_dim=1296, hidden_dim=512, n_layer=3
+03/24/2025 14:30:20 [INFO] ppo -- PPO initialized with persistent_dir: log/4_1000_20250324_142957, device: cuda:0, config: PPOConfig(num_non_terminals=4, max_productions=1000, criterion='f1', num_sentences_per_score=256, num_sentences_per_batch=256, episodes_per_batch=8, n_updates_per_iteration=10, lr=0.0002, gamma=0.99, clip=0.2, actor_weight=1.0, critic_weight=0.5, entropy_weight=0.01, save_freq=20, seed=0, min_ep_rews_threshold=0.0, hidden_dim=512, n_layer=3)
+
+03/24/2025 14:30:20 [INFO] ppo -- Learning... Running 1000 timesteps per episode, 8 episodes per batch for a total of 10000000 timesteps
+/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py:86: UserWarning: index_reduce() is in beta and the API may change at any time. (Triggered internally at ../aten/src/ATen/native/cuda/Indexing.cu:1047.)
+  aggregated_full = aggregated_full.index_reduce(dim=1, index=rule_X, source=aggregated, reduce="amax")
+Traceback (most recent call last):
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/train.py", line 94, in <module>
+    train(name, persistent_dir, args, ppo_config)
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/train.py", line 36, in train
+    ppo.learn(args.timesteps)
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/ppo.py", line 222, in learn
+    buffer: RolloutBuffer = self.rollout()
+                            ^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/ppo.py", line 340, in rollout
+    obs, rew = self.env.step((action.item(), 1.))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/grammar_env.py", line 84, in step
+    cur_score: float = self.criterion.score(
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/criterion.py", line 131, in score
+    scores_list: list[torch.Tensor] = [
+                                      ^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/criterion.py", line 132, in <listcomp>
+    self.score_sentence(
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/f1_criterion.py", line 41, in score_sentence
+    spans: list[list[tuple[int, int, int]]] = parse_sentences(
+                                              ^^^^^^^^^^^^^^^^
+  File "/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py", line 265, in parse_sentences
+    spans: list[tuple[int, int, int]] = __backtrack(
+                                        ^^^^^^^^^^^^
+TypeError: can't unbox array from PyObject into native value.  The object maybe of a different type

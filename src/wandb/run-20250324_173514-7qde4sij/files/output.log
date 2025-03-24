@@ -1,0 +1,48 @@
+03/24/2025 17:35:22 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 17:35:22 [INFO] grammar_env.criterion.probability_criterion -- ProbabilityCriterion initialized with lower_bound=-200.00000
+03/24/2025 17:35:23 [INFO] grammar_env.grammar_env -- Environment initialized with 1000 max productions, BinaryGrammarFactory(num_nt=4, num_pt=14, num_rhs=324, num_r=1296) binary grammar factory.
+03/24/2025 17:35:23 [INFO] actor_critic -- ActorCritic initialized with 1,857,809 parameters, state_dim=1296, action_dim=1296, hidden_dim=512, n_layer=3
+03/24/2025 17:35:23 [INFO] ppo -- PPO initialized with persistent_dir: log/4_1000_20250324_173447, device: cuda:0, config: PPOConfig(num_non_terminals=4, max_productions=1000, criterion='f1', num_sentences_per_score=256, num_sentences_per_batch=256, episodes_per_batch=8, n_updates_per_iteration=10, lr=0.0002, gamma=0.99, clip=0.2, actor_weight=1.0, critic_weight=0.5, entropy_weight=0.01, save_freq=20, seed=0, min_ep_rews_threshold=0.0, hidden_dim=512, n_layer=3)
+03/24/2025 17:35:23 [INFO] ppo -- Learning... Running 1000 timesteps per episode, 8 episodes per batch for a total of 10000000 timesteps
+/home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py:86: UserWarning: index_reduce() is in beta and the API may change at any time. (Triggered internally at ../aten/src/ATen/native/cuda/Indexing.cu:1047.)
+  aggregated_full = aggregated_full.index_reduce(dim=1, index=rule_X, source=aggregated, reduce="amax")
+Program interrupted. (Use 'cont' to resume).
+--Call--
+> /home/edgarduc/miniconda3/envs/pcfg-env/lib/python3.11/bdb.py(323)set_trace()
+-> def set_trace(self, frame=None):
+  /home/edgarduc/miniconda3/envs/pcfg-env/lib/python3.11/bdb.py(600)run()
+-> exec(cmd, globals, locals)
+  <string>(1)<module>()
+  /home/edgarduc/PCFG_Reinforcement_learning/src/train.py(94)<module>()
+-> train(name, persistent_dir, args, ppo_config)
+  /home/edgarduc/PCFG_Reinforcement_learning/src/train.py(36)train()
+-> ppo.learn(args.timesteps)
+  /home/edgarduc/PCFG_Reinforcement_learning/src/ppo.py(222)learn()
+-> buffer: RolloutBuffer = self.rollout()
+  /home/edgarduc/PCFG_Reinforcement_learning/src/ppo.py(340)rollout()
+-> obs, rew = self.env.step((action.item(), 1.))
+  /home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/grammar_env.py(84)step()
+-> cur_score: float = self.criterion.score(
+  /home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/criterion.py(131)score()
+-> scores_list: list[torch.Tensor] = [
+  /home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/criterion.py(132)<listcomp>()
+-> self.score_sentence(
+  /home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/f1_criterion.py(41)score_sentence()
+-> spans: list[list[tuple[int, int, int]]] = parse_sentences(
+  /home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py(294)parse_sentences()
+-> spans: list[tuple[int, int, int]] = __backtrack(
+  /home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py(261)__backtrack()
+-> r, s = __backtrack_one(pi, X, Y, Z, log_prob, nt, i, j)
+  /home/edgarduc/PCFG_Reinforcement_learning/src/grammar_env/criterion/inside_algorithm.py(191)__backtrack_one()
+-> if np.isclose(pi[nt, i, j], pi[Y[r], i, s] + pi[Z[r], s + 1, j] + log_prob[r]):
+  <__array_function__ internals>(200)isclose()
+  /home/edgarduc/miniconda3/envs/pcfg-env/lib/python3.11/site-packages/numpy/core/numeric.py(2383)isclose()
+-> cond = zeros_like(finite, subok=True)
+  <__array_function__ internals>(200)zeros_like()
+  /home/edgarduc/miniconda3/envs/pcfg-env/lib/python3.11/site-packages/numpy/core/numeric.py(139)zeros_like()
+-> res = empty_like(a, dtype=dtype, order=order, subok=subok, shape=shape)
+  <__array_function__ internals>(200)empty_like()
+  /home/edgarduc/miniconda3/envs/pcfg-env/lib/python3.11/pdb.py(270)sigint_handler()
+-> self.set_trace(frame)
+> /home/edgarduc/miniconda3/envs/pcfg-env/lib/python3.11/bdb.py(323)set_trace()
+-> def set_trace(self, frame=None):

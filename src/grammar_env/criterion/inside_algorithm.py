@@ -179,7 +179,7 @@ def log_probability_sentence_given_grammar(
     return pi[torch.arange(batch_size, device=device), 0, 0, sentence_lengths - 1]
 
 
-@njit
+#@njit
 def __backtrack_one(
         pi: np.ndarray, X: np.ndarray, Y: np.ndarray, Z: np.ndarray, log_prob: np.ndarray,
         nt: int, i: int, j: int
@@ -235,7 +235,7 @@ def __backtrack_one(
 
 #     return spans
 
-@njit
+#@njit
 def __backtrack(
     pi: np.ndarray, X: np.ndarray, Y: np.ndarray, Z: np.ndarray, log_prob: np.ndarray,
     nt: int, i: int, j: int

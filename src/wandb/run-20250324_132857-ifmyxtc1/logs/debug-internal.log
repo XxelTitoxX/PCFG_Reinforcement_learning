@@ -1,0 +1,15 @@
+{"time":"2025-03-24T13:28:57.788893668+09:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250324_132857-ifmyxtc1/logs/debug-core.log"}
+{"time":"2025-03-24T13:28:57.907466401+09:00","level":"INFO","msg":"created new stream","id":"ifmyxtc1"}
+{"time":"2025-03-24T13:28:57.90752745+09:00","level":"INFO","msg":"stream: started","id":"ifmyxtc1"}
+{"time":"2025-03-24T13:28:57.907610011+09:00","level":"INFO","msg":"writer: Do: started","stream_id":"ifmyxtc1"}
+{"time":"2025-03-24T13:28:57.907692869+09:00","level":"INFO","msg":"sender: started","stream_id":"ifmyxtc1"}
+{"time":"2025-03-24T13:28:57.907619574+09:00","level":"INFO","msg":"handler: started","stream_id":"ifmyxtc1"}
+{"time":"2025-03-24T13:28:58.293641773+09:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-03-24T13:39:13.358318523+09:00","level":"INFO","msg":"stream: closing","id":"ifmyxtc1"}
+{"time":"2025-03-24T13:39:13.358370472+09:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-03-24T13:39:13.359199001+09:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-03-24T13:39:14.724110035+09:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-03-24T13:39:14.987491844+09:00","level":"INFO","msg":"handler: closed","stream_id":"ifmyxtc1"}
+{"time":"2025-03-24T13:39:14.987532445+09:00","level":"INFO","msg":"sender: closed","stream_id":"ifmyxtc1"}
+{"time":"2025-03-24T13:39:14.987515699+09:00","level":"INFO","msg":"writer: Close: closed","stream_id":"ifmyxtc1"}
+{"time":"2025-03-24T13:39:14.987594725+09:00","level":"INFO","msg":"stream: closed","id":"ifmyxtc1"}
