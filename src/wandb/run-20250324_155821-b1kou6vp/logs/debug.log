@@ -26,3 +26,4 @@ config: {'num_non_terminals': 4, 'max_productions': 1000, 'criterion': 'f1', 'nu
 2025-03-24 15:58:23,905 INFO    MainThread:1730559 [wandb_run.py:_redirect():2119] Wrapping output streams.
 2025-03-24 15:58:23,906 INFO    MainThread:1730559 [wandb_run.py:_redirect():2144] Redirects installed.
 2025-03-24 15:58:23,907 INFO    MainThread:1730559 [wandb_init.py:init():845] run started, returning control to user process
+2025-03-25 14:35:59,179 WARNING MsgRouterThr:1730559 [router.py:message_loop():77] message_loop has been closed
