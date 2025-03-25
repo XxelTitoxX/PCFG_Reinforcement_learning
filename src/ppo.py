@@ -91,16 +91,16 @@ class RolloutBuffer:
 class PPOConfig:
     # Grammar parameters
     num_non_terminals: int = 4  # Number of non-terminals
-    max_productions: int = 1000  # Maximum number of productions
+    max_productions: int = 200  # Maximum number of productions
 
     # Criterion parameters
     criterion: str = "f1"  # Criterion to use for training
-    num_sentences_per_score: int = 256  # Number of sentences used to score per criterion
-    num_sentences_per_batch: int = 256  # Number of sentences to process per batch
+    num_sentences_per_score: int = 16  # Number of sentences used to score per criterion
+    num_sentences_per_batch: int = 16  # Number of sentences to process per batch
 
     # Algorithm parameters
-    episodes_per_batch: int = 8  # Number of episodes to run per batch
-    n_updates_per_iteration: int = 10  # Number of times to update actor/critic per iteration
+    episodes_per_batch: int = 2  # Number of episodes to run per batch
+    n_updates_per_iteration: int = 5  # Number of times to update actor/critic per iteration
     lr: float = 2e-4  # Learning rate of optimizer
     gamma: float = 0.99  # Discount factor to be applied when calculating Rewards-To-Go
     clip: float = 0.2  # Recommended 0.2, helps define the threshold to clip the ratio during SGA
