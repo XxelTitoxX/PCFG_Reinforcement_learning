@@ -2947,3 +2947,109 @@
 2025-03-25 15:22:10,126 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
 2025-03-25 15:22:10,166 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
 2025-03-25 15:22:15,400 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:20,401 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:22,760 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:22:23,335 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:22:24,408 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:22:25,125 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:22:25,126 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:22:25,130 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:22:25,340 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:22:26,374 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:26,586 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:22:26,587 DEBUG   SenderThread:1736626 [sender.py:send():380] send: history
+2025-03-25 15:22:26,587 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: summary_record
+2025-03-25 15:22:26,588 INFO    SenderThread:1736626 [sender.py:_save_file():1378] saving file wandb-summary.json with policy end
+2025-03-25 15:22:27,359 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:22:27,359 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/wandb-summary.json
+2025-03-25 15:22:31,589 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:36,590 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:38,649 DEBUG   SenderThread:1736626 [sender.py:send():380] send: stats
+2025-03-25 15:22:40,126 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:22:40,126 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:22:40,130 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:22:42,361 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:47,362 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:52,363 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:22:55,126 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:22:55,126 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:22:55,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:22:57,398 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:02,399 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:07,400 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:08,651 DEBUG   SenderThread:1736626 [sender.py:send():380] send: stats
+2025-03-25 15:23:10,126 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:23:10,127 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:23:10,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:23:12,420 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:17,421 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:19,458 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:23:20,809 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:23:21,386 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:23:22,348 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:23:22,349 DEBUG   SenderThread:1736626 [sender.py:send():380] send: history
+2025-03-25 15:23:22,349 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: summary_record
+2025-03-25 15:23:22,350 INFO    SenderThread:1736626 [sender.py:_save_file():1378] saving file wandb-summary.json with policy end
+2025-03-25 15:23:22,386 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/wandb-summary.json
+2025-03-25 15:23:23,351 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:23,405 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:23:25,126 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:23:25,127 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:23:25,131 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:23:28,372 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:33,373 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:38,374 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:38,654 DEBUG   SenderThread:1736626 [sender.py:send():380] send: stats
+2025-03-25 15:23:40,127 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:23:40,127 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:23:40,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:23:44,353 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:49,354 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:54,355 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:23:55,127 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:23:55,127 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:23:55,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:24:00,314 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:05,315 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:08,656 DEBUG   SenderThread:1736626 [sender.py:send():380] send: stats
+2025-03-25 15:24:10,127 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:24:10,127 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:24:10,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:24:10,426 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:15,427 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:20,428 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:25,127 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:24:25,128 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:24:25,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:24:26,379 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:31,380 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:36,381 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:37,104 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:24:37,432 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:24:38,270 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:24:38,657 DEBUG   SenderThread:1736626 [sender.py:send():380] send: stats
+2025-03-25 15:24:39,439 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:24:39,807 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: partial_history
+2025-03-25 15:24:39,808 DEBUG   SenderThread:1736626 [sender.py:send():380] send: history
+2025-03-25 15:24:39,809 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: summary_record
+2025-03-25 15:24:39,809 INFO    SenderThread:1736626 [sender.py:_save_file():1378] saving file wandb-summary.json with policy end
+2025-03-25 15:24:40,128 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:24:40,129 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:24:40,131 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:24:40,439 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/wandb-summary.json
+2025-03-25 15:24:41,430 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:41,457 INFO    Thread-12 :1736626 [dir_watcher.py:_on_file_modified():288] file/dir modified: /home/edgarduc/PCFG_Reinforcement_learning/src/wandb/run-20250325_135207-f3fm6yjy/files/output.log
+2025-03-25 15:24:46,431 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:51,431 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:24:55,128 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:24:55,128 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:24:55,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:24:57,360 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:25:02,361 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:25:07,362 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:25:08,660 DEBUG   SenderThread:1736626 [sender.py:send():380] send: stats
+2025-03-25 15:25:10,128 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: stop_status
+2025-03-25 15:25:10,128 DEBUG   SenderThread:1736626 [sender.py:send_request():407] send_request: stop_status
+2025-03-25 15:25:10,170 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: internal_messages
+2025-03-25 15:25:12,453 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
+2025-03-25 15:25:17,454 DEBUG   HandlerThread:1736626 [handler.py:handle_request():146] handle_request: status_report
