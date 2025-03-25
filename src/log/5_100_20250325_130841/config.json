@@ -1,0 +1,20 @@
+{
+    "num_non_terminals": 5,
+    "max_productions": 100,
+    "criterion": "f1",
+    "num_sentences_per_score": 8,
+    "num_sentences_per_batch": 8,
+    "episodes_per_batch": 2,
+    "n_updates_per_iteration": 5,
+    "lr": 0.0002,
+    "gamma": 0.99,
+    "clip": 0.2,
+    "actor_weight": 1.0,
+    "critic_weight": 0.5,
+    "entropy_weight": 0.01,
+    "save_freq": 20,
+    "seed": 0,
+    "min_ep_rews_threshold": 0.0,
+    "hidden_dim": 512,
+    "n_layer": 3
+}
