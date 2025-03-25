@@ -26,21 +26,98 @@ __all__ = ['log_probability_sentence_given_grammar', 'parse_sentences']
 logger = getLogger(__name__)
 
 
+# def __calculate_dp(
+#         pi: torch.Tensor, binary_rule_probs: list[tuple[int, int, int, float]],
+#         maximum: bool
+# ) -> None:
+#     """
+#     pi: torch.Tensor of shape (batch_size, num_symbols, n, n)
+#     binary_rule_probs: list of tuples (X, Y, Z, prob) for rules X -> Y Z
+#     maximum: if True, use max (for parsing); otherwise, use sum.
+#     """
+#     time_s: float = time.time()
+#     device: torch.device = pi.device
+#     batch_size: int = pi.shape[0]
+#     n: int = pi.shape[2]
+#     R: int = len(binary_rule_probs)
+#     R_full: int = pi.shape[1]
+
+#     # Convert binary_rule_probs into tensors.
+#     rule_X = torch.tensor([r[0] for r in binary_rule_probs], device=device, dtype=torch.long)
+#     rule_Y = torch.tensor([r[1] for r in binary_rule_probs], device=device, dtype=torch.long)
+#     rule_Z = torch.tensor([r[2] for r in binary_rule_probs], device=device, dtype=torch.long)
+#     rule_log_prob = torch.tensor(
+#         [r[3] for r in binary_rule_probs], device=device, dtype=pi.dtype
+#     ).log()
+
+#     for i in range(n - 1, -1, -1):
+#         for j in range(i + 1, n):
+#             # Generate vector of split points: s in [i, j)
+#             L: int = j - i
+#             s_range = torch.arange(i, j, device=device)  # shape (L,)
+
+#             # left[b, r, s] = pi[b, rule_Y[r], i, s] for b in batches, r in rules, s in s_range
+#             left = pi[:, rule_Y[:, None], i, s_range[None, :]]
+#             assert left.shape == (batch_size, R, L)
+
+#             # right[b, r, s] = pi[b, rule_Z[r], s + 1, j] for b in batches, r in rules, s in s_range
+#             right = pi[:, rule_Z[:, None], s_range[None, :] + 1, j]
+#             assert right.shape == (batch_size, R, L)
+
+#             # e^pi(X, i, j)
+#             # = sum_{X -> YZ in R, s in [i, j - 1]} (e^log P(X -> AB) * e^pi(Y, i, s) * e^pi(Z, s + 1, j))
+#             # pi(X, i, j)
+#             # = logsumexp_{X -> YZ in R, s in [i, j - 1]} (log P(X -> AB) + pi(Y, i, s) + pi(Z, s + 1, j))
+#             # If maximum is true, use max instead of sum (used for parsing)
+#             mul_prob_lr: torch.Tensor = left + right
+#             mul_prob_lr += rule_log_prob[None, :, None]
+#             assert mul_prob_lr.shape == (batch_size, R, L)
+
+#             # Rules can contain two rules with the same X.
+#             # Thus, rule_X can contain duplicate values.
+#             # We aggregate the values in aggregated_full using index_reduce
+#             if maximum:
+#                 aggregated: torch.Tensor = mul_prob_lr.amax(dim=2)
+#                 assert aggregated.shape == (batch_size, R)
+
+#                 aggregated_full: torch.Tensor = torch.full(
+#                     (batch_size, R_full), -torch.inf, device=device
+#                 )
+#                 aggregated_full = aggregated_full.index_reduce(dim=1, index=rule_X, source=aggregated, reduce="amax")
+#             else:
+#                 aggregated: torch.Tensor = mul_prob_lr.logsumexp(dim=2)
+#                 assert aggregated.shape == (batch_size, R)
+
+#                 _logsumexp_m: torch.Tensor = aggregated.amax(dim=1)
+#                 # As -inf - (-inf) = nan, we replace -inf with 0
+#                 _logsumexp_m[_logsumexp_m == -float('inf')] = 0
+#                 aggregated -= _logsumexp_m[:, None]
+#                 aggregated_full: torch.Tensor = torch.zeros(
+#                     (batch_size, R_full), device=device
+#                 )
+#                 aggregated_full = aggregated_full.index_add(dim=1, index=rule_X, source=aggregated.exp())
+#                 torch.log(aggregated_full, out=aggregated_full)
+#                 aggregated_full += _logsumexp_m[:, None]
+
+#             # Save the aggregated values to pi[:, :, i, j]
+#             pi[:, :, i, j] = aggregated_full
+
+#     logger.debug(
+#         f"DP calculation time: {time.time() - time_s:.5f} seconds, "
+#         f"batch: {batch_size}, n: {n}, num_rules: {len(binary_rule_probs)}"
+#     )
+
 def __calculate_dp(
         pi: torch.Tensor, binary_rule_probs: list[tuple[int, int, int, float]],
         maximum: bool
 ) -> None:
     """
-    pi: torch.Tensor of shape (batch_size, num_symbols, n, n)
-    binary_rule_probs: list of tuples (X, Y, Z, prob) for rules X -> Y Z
-    maximum: if True, use max (for parsing); otherwise, use sum.
+    Optimized DP computation using broadcasting instead of explicit loops.
     """
     time_s: float = time.time()
     device: torch.device = pi.device
-    batch_size: int = pi.shape[0]
-    n: int = pi.shape[2]
+    batch_size, R_full, n, _ = pi.shape
     R: int = len(binary_rule_probs)
-    R_full: int = pi.shape[1]
 
     # Convert binary_rule_probs into tensors.
     rule_X = torch.tensor([r[0] for r in binary_rule_probs], device=device, dtype=torch.long)
@@ -50,61 +127,46 @@ def __calculate_dp(
         [r[3] for r in binary_rule_probs], device=device, dtype=pi.dtype
     ).log()
 
-    for i in range(n - 1, -1, -1):
-        for j in range(i + 1, n):
-            # Generate vector of split points: s in [i, j)
-            L: int = j - i
-            s_range = torch.arange(i, j, device=device)  # shape (L,)
-
-            # left[b, r, s] = pi[b, rule_Y[r], i, s] for b in batches, r in rules, s in s_range
-            left = pi[:, rule_Y[:, None], i, s_range[None, :]]
-            assert left.shape == (batch_size, R, L)
-
-            # right[b, r, s] = pi[b, rule_Z[r], s + 1, j] for b in batches, r in rules, s in s_range
-            right = pi[:, rule_Z[:, None], s_range[None, :] + 1, j]
-            assert right.shape == (batch_size, R, L)
-
-            # e^pi(X, i, j)
-            # = sum_{X -> YZ in R, s in [i, j - 1]} (e^log P(X -> AB) * e^pi(Y, i, s) * e^pi(Z, s + 1, j))
-            # pi(X, i, j)
-            # = logsumexp_{X -> YZ in R, s in [i, j - 1]} (log P(X -> AB) + pi(Y, i, s) + pi(Z, s + 1, j))
-            # If maximum is true, use max instead of sum (used for parsing)
-            mul_prob_lr: torch.Tensor = left + right
-            mul_prob_lr += rule_log_prob[None, :, None]
-            assert mul_prob_lr.shape == (batch_size, R, L)
-
-            # Rules can contain two rules with the same X.
-            # Thus, rule_X can contain duplicate values.
-            # We aggregate the values in aggregated_full using index_reduce
-            if maximum:
-                aggregated: torch.Tensor = mul_prob_lr.amax(dim=2)
-                assert aggregated.shape == (batch_size, R)
-
-                aggregated_full: torch.Tensor = torch.full(
-                    (batch_size, R_full), -torch.inf, device=device
-                )
-                aggregated_full = aggregated_full.index_reduce(dim=1, index=rule_X, source=aggregated, reduce="amax")
-            else:
-                aggregated: torch.Tensor = mul_prob_lr.logsumexp(dim=2)
-                assert aggregated.shape == (batch_size, R)
-
-                _logsumexp_m: torch.Tensor = aggregated.amax(dim=1)
-                # As -inf - (-inf) = nan, we replace -inf with 0
-                _logsumexp_m[_logsumexp_m == -float('inf')] = 0
-                aggregated -= _logsumexp_m[:, None]
-                aggregated_full: torch.Tensor = torch.zeros(
-                    (batch_size, R_full), device=device
-                )
-                aggregated_full = aggregated_full.index_add(dim=1, index=rule_X, source=aggregated.exp())
-                torch.log(aggregated_full, out=aggregated_full)
-                aggregated_full += _logsumexp_m[:, None]
-
-            # Save the aggregated values to pi[:, :, i, j]
-            pi[:, :, i, j] = aggregated_full
-
+    # Create indices for all pairs (i, j) where i < j
+    i_indices, j_indices = torch.triu_indices(n, n, offset=1, device=device)
+    L_values = j_indices - i_indices  # Lengths (j - i)
+    s_ranges = [torch.arange(i, j, device=device) for i, j in zip(i_indices.tolist(), j_indices.tolist())]
+    max_L = max(L_values.tolist())
+    
+    # Pad s_ranges to max_L for efficient tensor operations
+    s_tensor = torch.full((len(s_ranges), max_L), -1, dtype=torch.long, device=device)
+    for idx, s_range in enumerate(s_ranges):
+        s_tensor[idx, :len(s_range)] = s_range
+    valid_mask = s_tensor != -1
+    
+    # Gather left and right probabilities in a batched way
+    left = pi[:, rule_Y[:, None], i_indices[:, None], s_tensor[None, :, :]]
+    right = pi[:, rule_Z[:, None], s_tensor[None, :, :] + 1, j_indices[:, None]]
+    left.masked_fill_(~valid_mask[None, None, :], float('-inf'))
+    right.masked_fill_(~valid_mask[None, None, :], float('-inf'))
+    
+    # Compute multiplication and aggregation
+    mul_prob_lr = left + right + rule_log_prob[None, :, None]
+    
+    if maximum:
+        aggregated = torch.amax(mul_prob_lr, dim=2)
+        aggregated_full = torch.full((batch_size, R_full), -torch.inf, device=device)
+        aggregated_full.index_reduce_(dim=1, index=rule_X, source=aggregated, reduce="amax")
+    else:
+        aggregated = torch.logsumexp(mul_prob_lr, dim=2)
+        logsumexp_m = aggregated.amax(dim=1, keepdim=True)
+        logsumexp_m[logsumexp_m == -float('inf')] = 0
+        aggregated -= logsumexp_m
+        aggregated_full = torch.zeros((batch_size, R_full), device=device)
+        aggregated_full.index_add_(dim=1, index=rule_X, source=aggregated.exp())
+        aggregated_full.log_().add_(logsumexp_m)
+    
+    # Store results
+    pi[:, :, i_indices, j_indices] = aggregated_full[:, :, None]
+    
     logger.debug(
         f"DP calculation time: {time.time() - time_s:.5f} seconds, "
-        f"batch: {batch_size}, n: {n}, num_rules: {len(binary_rule_probs)}"
+        f"batch: {batch_size}, n: {n}, num_rules: {R}"
     )
 
 
