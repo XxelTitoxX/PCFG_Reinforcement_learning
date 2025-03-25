@@ -197,7 +197,7 @@ def __backtrack_one(
 
     # Compute possible values for comparison
     pi_nt_ij = pi[nt, i, j]
-    pi_values = pi[Y[valid_r], i, s_range[None, :]] + pi[Z[valid_r], s_range[None, :] + 1, j] + log_prob[valid_r]
+    pi_values = pi[Y[valid_r], i, s_range[:, None]] + pi[Z[valid_r], s_range[:, None] + 1, j] + log_prob[valid_r]
 
     # Check for matches using np.isclose
     matches = np.isclose(pi_nt_ij, pi_values)
@@ -205,7 +205,7 @@ def __backtrack_one(
     # Find the first match
     match_indices = np.argwhere(matches)
     if match_indices.size > 0:
-        r_idx, s_idx = match_indices[0]
+        s_idx, r_idx = match_indices[0]
         return valid_r[r_idx], s_range[s_idx]
 
     # If no match is found, raise an error
