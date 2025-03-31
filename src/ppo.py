@@ -91,12 +91,12 @@ class RolloutBuffer:
 class PPOConfig:
     # Grammar parameters
     num_non_terminals: int = 4  # Number of non-terminals
-    max_productions: int = 200  # Maximum number of productions
+    max_productions: int = 400  # Maximum number of productions
 
     # Criterion parameters
     criterion: str = "f1"  # Criterion to use for training
-    num_sentences_per_score: int = 16  # Number of sentences used to score per criterion
-    num_sentences_per_batch: int = 16  # Number of sentences to process per batch
+    num_sentences_per_score: int = 256  # Number of sentences used to score per criterion
+    num_sentences_per_batch: int = 256  # Number of sentences to process per batch
 
     # Algorithm parameters
     episodes_per_batch: int = 2  # Number of episodes to run per batch
@@ -106,7 +106,10 @@ class PPOConfig:
     clip: float = 0.2  # Recommended 0.2, helps define the threshold to clip the ratio during SGA
     actor_weight: float = 1.  # Weight of the actor loss
     critic_weight: float = 0.5  # Weight of the critic loss
-    entropy_weight: float = 0.01  # Weight of the entropy loss
+    entropy_weight: float = 0.05  # Weight of the entropy loss
+    entropy_weight_decay: float = 0.9  # Decay of the entropy weight
+    entropy_weight_min: float = 0.01  # Minimum entropy weight
+    entropy_weight_decay_freq: int = 5  # How often to decay the entropy weight
 
     # Miscellaneous parameters
     save_freq: int = 20  # How often we save in number of iterations
@@ -293,6 +296,12 @@ class PPO:
                 torch.save(
                     self.actor_critic.state_dict(),
                     str(path)
+                )
+
+            if i_so_far % self.config.entropy_weight_decay_freq == 0:
+                self.config.entropy_weight = max(
+                    self.config.entropy_weight * self.config.entropy_weight_decay,
+                    self.config.entropy_weight_min
                 )
 
         path: Path = self.persistent_dir / "torch" / f"actor_critic_{i_so_far}.pth"

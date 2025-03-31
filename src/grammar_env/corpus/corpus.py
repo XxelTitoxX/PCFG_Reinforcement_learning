@@ -20,7 +20,7 @@ class Corpus:
     min_sentence_length: Optional[int] = 1
     max_sentence_length: Optional[int] = 60
     max_vocab_size: Optional[int] = None
-    max_len: Optional[int] = 10
+    max_len: Optional[int] = 256
 
     sentences: list[Sentence] = field(init=False)
     symbol_count: list[tuple[str, int]] = field(init=False)
