@@ -16,6 +16,8 @@ from grammar_env.corpus.corpus import Corpus
 from grammar_env.criterion import CoverageCriterion, Criterion, F1Criterion, ProbabilityCriterion
 from grammar_env.grammar.binary_grammar import BinaryGrammar, BinaryGrammarFactory
 from grammar_env.grammar.unary_grammar import SupervisedUnaryGrammar, UnaryGrammar
+from env import Environment
+from grammar import CompleteBinGrammar
 from grammar_env.grammar_env import GrammarEnv
 from result_saver import ResultSaver
 from writer import Writer
@@ -111,6 +113,8 @@ class PPOConfig:
     entropy_weight_min: float = 0.01  # Minimum entropy weight
     entropy_weight_decay_freq: int = 5  # How often to decay the entropy weight
 
+    max_num_steps: int = 100  # Maximum number of steps to run in the environment
+
     # Miscellaneous parameters
     save_freq: int = 20  # How often we save in number of iterations
     seed: int = 0  # Sets the seed of our program, used for reproducibility of results
@@ -167,10 +171,7 @@ class PPO:
                 )
             case _:
                 raise ValueError(f"Invalid criterion: {config.criterion}")
-        self.env: GrammarEnv = GrammarEnv(
-            self._criterion, config.max_productions,
-            self.binary_grammar_factory, self.unary_grammar
-        )
+        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, CompleteBinGrammar)
         self.state_dim = self.env.num_r
         self.action_dim = self.env.num_r
 
@@ -222,18 +223,19 @@ class PPO:
             self.actor_critic.to(torch.device('cpu'))
             self.actor_critic.eval()
             with torch.no_grad():
-                buffer: RolloutBuffer = self.rollout()
+                self.rollout()
             device = self.device
             self.actor_critic.to(device)
             self.actor_critic.train()
 
-            batch_obs: torch.Tensor = torch.from_numpy(buffer.obs).to(device)
-            batch_acts: torch.Tensor = torch.from_numpy(buffer.acts).to(device)
-            batch_log_probs: torch.Tensor = torch.from_numpy(buffer.log_probs).to(device)
-            batch_rtgs: torch.Tensor = torch.from_numpy(buffer.rtgs).to(device)
+            batch_obs: torch.Tensor = torch.from_numpy(self.env.state).to(device)
+            batch_acts: torch.Tensor = torch.from_numpy(self.env.actions).to(device)
+            batch_log_probs: torch.Tensor = torch.from_numpy(self.env.actions_log_probs).to(device)
+            batch_rtgs: torch.Tensor = torch.from_numpy(self.env.compute_rtgs()).to(device)
+            batch_lens: torch.Tensor = torch.from_numpy(self.env.ep_len).to(device)
 
             # Increment timesteps so far and iterations so far
-            t_so_far += sum(buffer.lens)
+            t_so_far += sum(batch_lens)
             i_so_far += 1
 
             # Logging timesteps so far and iterations so far
@@ -311,7 +313,7 @@ class PPO:
             str(path)
         )
 
-    def rollout(self) -> RolloutBuffer:
+    def rollout(self):
         """
         Collect batch of data from simulation.
         As PPO is an on-policy algorithm, we need to collect a fresh batch
@@ -320,85 +322,46 @@ class PPO:
         :return: RolloutBuffer containing the batch data
         """
         # Batch data.
-        batch_obs: list[np.ndarray] = []
-        batch_acts: list[np.ndarray] = []
-        batch_log_probs: list[np.ndarray] = []
-        batch_rews: list[list[float]] = []
-        batch_lens: list[int] = []
 
         time_s = time.time()
 
-        # Keep simulating until we've run more than or equal to specified timesteps per batch
-        for _ in range(self.config.episodes_per_batch):
-            # Episodic data. Keeps track of rewards per episode.
-            ep_rews: list[float] = []
 
-            # Reset the environment.
-            obs: np.ndarray = self.env.reset()
+        # Sample sentences from the training corpus (sentences are padded to max length with index -1)
+        batch_sentences = self.train_corpus.get_dataloader(self.config.num_sentences_per_batch)
 
-            # Run an episode for max_timesteps_per_episode timesteps
-            # In our case, max_timesteps_per_episode is max_productions
-            ep_t: int = 0
-            for ep_t in range(self.config.max_productions):
-                # Track observations in this batch
-                batch_obs.append(obs)
+        # Compute actual lengths (ignoring -1 values)
+        seq_lengths = torch.tensor(batch_sentences!=-1).sum(axis=1)
 
-                # Calculate action and make a step in the env.
-                action, log_prob, _ = self.actor_critic.act(obs)
-                assert action.shape == log_prob.shape == (1,)
-                obs, rew = self.env.step((action.item(), 1.))
+        # Reset the environment.
+        self.env.reset(seq_lengths.max().item())
+        self.env.init_state(batch_sentences)
 
-                # Track recent reward, action, and action log probability
-                ep_rews.append(rew)
-                batch_acts.append(action)
-                batch_log_probs.append(log_prob)
+        # Run an episode for max_timesteps_per_episode timesteps
+        ep_t: int = 0
+        for ep_t in range(self.config.max_num_steps):
 
-                # If the environment tells us the episode is terminated, break
-                if self.env.is_endstate():
-                    break
+            # Calculate action and make a step in the env.
+            current_states, not_done = self.env.get_state()
+            action, log_prob, _ = self.actor_critic.act(torch.tensor(current_states[not_done]))
+            assert action.shape == log_prob.shape == (len(not_done),1)
+            padded_action = np.full(self.env.num_episodes, -1)
+            padded_action[not_done] = action.squeeze().cpu().numpy()
+            padded_log_prob = np.full(self.env.num_episodes, -1)
+            padded_log_prob[not_done] = log_prob.squeeze().cpu().numpy()
+            self.env.step(padded_action, padded_log_prob)
 
-            # Track episodic lengths and rewards
-            batch_lens.append(ep_t + 1)
-            batch_rews.append(ep_rews)
+            # If the environment tells us the episode is terminated, break
+            if self.env.stop():
+                break
 
-        # ALG STEP 4, compute Rewards-To-Go
-        batch_rtgs: np.ndarray = self.compute_rtgs(batch_rews)
+
 
         # Log the episodic returns and episodic lengths in this batch.
-        self.logger['batch_rews'] = batch_rews
-        self.logger['batch_lens'] = batch_lens
+        self.logger['batch_rews'] = self.env.compute_rtgs()
+        self.logger['batch_lens'] = self.env.ep_len
         logger.info(f"Rollout done. {self.config.episodes_per_batch} episodes ran in {time.time() - time_s: .2f} secs")
 
-        return RolloutBuffer(
-            obs=np.stack(batch_obs, axis=0), acts=np.concatenate(batch_acts, axis=0),
-            log_probs=np.concatenate(batch_log_probs, axis=0), rtgs=batch_rtgs, lens=batch_lens
-        )
 
-    def compute_rtgs(self, batch_rews: list[list[float]]) -> np.ndarray:
-        """
-        Compute the Reward-To-Go of each timestep in a batch given the rewards.
-
-        :param batch_rews: batch of rewards of an episode.
-                            [[r_0, r_1, ..., r_T], [r'_0, r'_1, ..., r'_T], ..., [r''_0, r''_1, ..., r''_T]]
-        :return:
-            np.ndarray of shape (number of timesteps in batch)
-            The Rewards-To-Go for each timestep in the batch.
-        """
-        # The rewards-to-go (rtg) per episode per batch to return.
-        # The shape will be (num timesteps per episode).
-        batch_rtgs: list[float] = []
-
-        # Iterate through each episode
-        for ep_rews in reversed(batch_rews):
-            discounted_reward: float = 0.  # The discounted reward so far
-
-            # Iterate through all rewards in the episode.
-            # We go backwards for smoother calculation of each discounted return
-            for rew in reversed(ep_rews):
-                discounted_reward = rew + discounted_reward * self.config.gamma
-                batch_rtgs.insert(0, discounted_reward)
-
-        return np.array(batch_rtgs, dtype=np.float32)
 
     def _log_summary(self):
         delta_t: float = (time.time_ns() - self.logger['time_ns']) / 1e9
