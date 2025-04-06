@@ -89,17 +89,13 @@ class AttentionPooling(nn.Module):
         return pooled
 
 class EnhancedTransformerEmbedding(nn.Module):
-    def __init__(self, state_dim, embedding_dim, num_heads, hidden_dim, num_layers, max_seq_len,
-                 pooling_type='attention'):
+    def __init__(self, state_dim, embedding_dim, num_heads, hidden_dim, num_layers, max_seq_len, pooling_type='attention'):
         super().__init__()
-        
-        # Action embedding layer
-        self.action_embedding = nn.Embedding(state_dim, embedding_dim)
+
+        self.action_embedding = nn.Embedding(state_dim + 1, embedding_dim, padding_idx=0)  # Adjusted for padding
         self.embedding_norm = nn.LayerNorm(embedding_dim)
         self.positional_encoding = PositionalEncoding(embedding_dim, max_seq_len)
 
-        
-        # Transformer layers
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim,
             nhead=num_heads,
@@ -107,51 +103,32 @@ class EnhancedTransformerEmbedding(nn.Module):
             batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-        # Pooling strategy
+
         self.pooling_type = pooling_type
         if pooling_type == 'attention':
             self.attention_pooling = AttentionPooling(embedding_dim)
-        
-        
-    def forward(self, action_sequence, state=None, mask=None):
+
+    def forward(self, action_sequence, seq_lengths):
         """
-        action_sequence: Tensor of shape (batch_size, seq_len) containing action indices
-        state: Optional tensor of shape (batch_size, state_dim) for conditioning
-        mask: Optional boolean mask of shape (batch_size, seq_len) indicating valid positions
+        action_sequence: Tensor of shape (batch, max_seq_len) with -1 as null
+        seq_lengths: Tensor of actual sequence lengths before padding
         """
-        batch_size, seq_len = action_sequence.shape
-        
-        # Create embeddings
+        action_sequence = action_sequence + 1  # Shift -1 to 0 for padding
+        mask = action_sequence != 0  # Create mask where 0 (padded) is False
+
         x = self.action_embedding(action_sequence)  # (batch, seq_len, embedding_dim)
         x = self.embedding_norm(x)
-        
-        # Add positional encoding
         x = self.positional_encoding(x)
-        
-        
-        # Create attention mask for transformer (converting from boolean to float)
-        attn_mask = None
-        if mask is not None:
-            attn_mask = ~mask  # Invert because transformer uses 1 for masked positions
-        
-        # Apply transformer encoder
+
+        attn_mask = ~mask  # Transformer uses True for padding positions
         x = self.transformer_encoder(x, src_key_padding_mask=attn_mask)
-        
 
         if self.pooling_type == 'mean':
-            # Mean pooling (with mask)
-            if mask is not None:
-                pooled = (x * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True)
-            else:
-                pooled = x.mean(dim=1)
+            pooled = (x * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True)
         elif self.pooling_type == 'max':
-            # Max pooling (with mask)
-            if mask is not None:
-                x = x.masked_fill(~mask.unsqueeze(-1), -1e9)
+            x = x.masked_fill(~mask.unsqueeze(-1), -1e9)
             pooled = x.max(dim=1)[0]
         elif self.pooling_type == 'attention':
-            # Attention pooling
             pooled = self.attention_pooling(x, mask)
-        
+
         return pooled
