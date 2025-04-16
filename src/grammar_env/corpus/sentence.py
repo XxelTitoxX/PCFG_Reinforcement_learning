@@ -11,6 +11,74 @@ __all__ = ['GoldSpan', 'Sentence']
 
 logger = getLogger(__name__)
 
+POS_CLUSTER: dict[str, str] = {
+            "CC": "CC",
+
+            "CD": "CD",
+
+            "DT": "DT",
+            "PDT": "DT",
+
+            "IN": "IN",
+
+            "JJ": "JJ",
+            "JJR": "JJ",
+            "JJS": "JJ",
+
+            "NN": "NN",
+            "NNS": "NN",
+            "NNP": "NN",
+            "NNPS": "NN",
+
+            "PRP": "PRP",
+            "PRP$": "PRP",
+
+            "RB": "RB",
+            "RBR": "RB",
+            "RBS": "RB",
+
+            "TO": "TO",
+
+            "VB": "VB",
+            "VBD": "VB",
+            "VBG": "VB",
+            "VBN": "VB",
+            "VBP": "VB",
+            "VBZ": "VB",
+
+            "WDT": "WH-",
+            "WP": "WH-",
+            "WP$": "WH-",
+            "WRB": "WH-",
+
+            "MD": "MD",
+
+            "POS": "POS",
+
+            "EX": "ETC",
+            "FW": "ETC",
+            "LS": "ETC",
+            "RP": "ETC",
+            "SYM": "ETC",
+            "UH": "ETC",
+        }
+
+POS_CLUSTER_TO_IDX: dict[str, int] = {
+            "CC": 0,
+            "CD": 1,
+            "DT": 2,
+            "IN": 3,
+            "JJ": 4,
+            "NN": 5,
+            "PRP": 6,
+            "RB": 7,
+            "TO": 8,
+            "VB": 9,
+            "WH-": 10,
+            "MD": 11,
+            "POS": 12,
+            "ETC": 13
+        }
 
 @dataclass_json
 @dataclass(frozen=True)
@@ -97,6 +165,7 @@ class Sentence:
     
     This is used to calculate the oracle f1 score.
     """
+    pos_tags: list[int] = field(init=False)
 
     def __post_init__(self):
         self.actions: list[Action] = get_actions(self.raw)
@@ -112,6 +181,8 @@ class Sentence:
                     self.actions_sanitized.append(action)
 
         self._initialize_gold_and_sr()
+
+        self.__pos_tags()
 
         num_shifts: int = len([action for action in self.tree_sr if action == 'S'])
         num_reduces: int = len([action for action in self.tree_sr if action == 'R'])
@@ -224,3 +295,13 @@ class Sentence:
 
     def __len__(self):
         return len(self.symbols)
+    
+    def __pos_tags(self):
+        sentence_pos_tags = []
+        for action in self.actions_sanitized:
+            match action:
+                case Shift(pos_tag, symbol):
+                    sentence_pos_tags.append(POS_CLUSTER_TO_IDX[POS_CLUSTER[pos_tag]])
+                case _:
+                    pass
+            self.pos_tags = sentence_pos_tags

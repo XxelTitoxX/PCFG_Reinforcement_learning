@@ -12,19 +12,14 @@ __all__ = ['CoverageCriterion']
 class CoverageCriterion(Criterion):
     def __init__(
             self, corpus: Corpus, device: torch.device,
-            num_sentences_per_score: int, num_sentences_per_batch: int
     ):
         super().__init__(
-            corpus, device,
-            num_sentences_per_score, num_sentences_per_batch
+            corpus, device
         )
 
-    def score_sentence(
-            self, binary_grammar: BinaryGrammar, unary_grammar: UnaryGrammar,
-            sentence_indexes: torch.Tensor, sentences: torch.Tensor, sentence_lengths: torch.Tensor
+    def score_sentences(
+            self, env
     ) -> torch.Tensor:
-        p: torch.Tensor = log_probability_sentence_given_grammar(
-            binary_grammar, unary_grammar,
-            sentences, sentence_lengths
-        )
-        return (p > -torch.inf).float() * 100.
+        scores = env.done.float()
+        self.update_score(scores)
+        return scores

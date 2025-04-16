@@ -23,11 +23,12 @@ class LSTMEmbedding(nn.Module):
         if bidirectional:
             self.projection = nn.Linear(hidden_dim * 2, hidden_dim)
 
-    def forward(self, action_sequence, seq_lengths):
+    def forward(self, action_sequence):
         """
         action_sequence: Tensor of shape (batch, max_seq_len) with -1 as null
         seq_lengths: Tensor of actual sequence lengths before padding
         """
+        seq_lengths = (action_sequence != -1).sum(dim=1)  # Calculate sequence lengths
         action_sequence = action_sequence + 1  # Shift -1 to 0 for padding
         embedded_actions = self.action_embedding(action_sequence)  # (batch, max_seq_len, embedding_dim)
         embedded_actions = self.norm_emb(embedded_actions)  # Normalize embeddings
@@ -79,6 +80,7 @@ class AttentionPooling(nn.Module):
         
         # Apply mask if provided
         if mask is not None:
+            assert mask.size(1) == x.size(1), f"Mask size mismatch: {mask.size(1)} vs {x.size(1)}"
             attn_scores = attn_scores.masked_fill(~mask, -1e9)
         
         # Normalize attention scores
@@ -89,7 +91,7 @@ class AttentionPooling(nn.Module):
         return pooled
 
 class EnhancedTransformerEmbedding(nn.Module):
-    def __init__(self, state_dim, embedding_dim, num_heads, hidden_dim, num_layers, max_seq_len, pooling_type='attention'):
+    def __init__(self, state_dim, embedding_dim, hidden_dim, num_layers, max_seq_len=60, num_heads=2, pooling_type='attention'):
         super().__init__()
 
         self.action_embedding = nn.Embedding(state_dim + 1, embedding_dim, padding_idx=0)  # Adjusted for padding
@@ -99,7 +101,7 @@ class EnhancedTransformerEmbedding(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embedding_dim,
             nhead=num_heads,
-            dim_feedforward=hidden_dim,
+            dim_feedforward=embedding_dim*2,
             batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
@@ -108,7 +110,9 @@ class EnhancedTransformerEmbedding(nn.Module):
         if pooling_type == 'attention':
             self.attention_pooling = AttentionPooling(embedding_dim)
 
-    def forward(self, action_sequence, seq_lengths):
+        self.output_projection = nn.Linear(embedding_dim, hidden_dim)
+
+    def forward(self, action_sequence):
         """
         action_sequence: Tensor of shape (batch, max_seq_len) with -1 as null
         seq_lengths: Tensor of actual sequence lengths before padding
@@ -123,6 +127,9 @@ class EnhancedTransformerEmbedding(nn.Module):
         attn_mask = ~mask  # Transformer uses True for padding positions
         x = self.transformer_encoder(x, src_key_padding_mask=attn_mask)
 
+        # Here the sequence length may not correspond to the mask anymore (some position on dimension 1 may have been discarded), leading to errors
+        mask = mask[:, :x.size(1)]
+        
         if self.pooling_type == 'mean':
             pooled = (x * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True)
         elif self.pooling_type == 'max':
@@ -130,5 +137,7 @@ class EnhancedTransformerEmbedding(nn.Module):
             pooled = x.max(dim=1)[0]
         elif self.pooling_type == 'attention':
             pooled = self.attention_pooling(x, mask)
+
+        pooled = self.output_projection(pooled)
 
         return pooled

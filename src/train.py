@@ -47,10 +47,8 @@ if __name__ == '__main__':
     # use probability criterion by default
     parser.add_argument("--criterion", type=str)
     parser.add_argument("--use_wandb", action='store_true')
-    parser.add_argument("--max_productions", type=int)
     parser.add_argument("--num_non_terminals", type=int)
 
-    parser.add_argument("--episodes_per_batch", type=int)
     parser.add_argument("--n_updates_per_iteration", type=int)
     parser.add_argument("--lr", type=float)
     parser.add_argument("--gamma", type=float)
@@ -64,7 +62,11 @@ if __name__ == '__main__':
     parser.add_argument("--min_ep_rews_threshold", type=float)
     parser.add_argument("--num_sentences_per_score", type=int)
     parser.add_argument("--num_sentences_per_batch", type=int)
+    parser.add_argument("--max_num_steps", type=int)
 
+    parser.add_argument("--embedding_dim", type=int)
+    parser.add_argument("--seq_n_layers", type=int)
+    
     parser.add_argument("--hidden_dim", type=int)
     parser.add_argument("--n_layer", type=int)
 
@@ -76,7 +78,7 @@ if __name__ == '__main__':
     }
     ppo_config: PPOConfig = PPOConfig(**hyperparameters)
 
-    name: str = f"{ppo_config.num_non_terminals}_{ppo_config.max_productions}_{datetime_tag()}"
+    name: str = f"{ppo_config.num_non_terminals}_{ppo_config.num_sentences_per_batch}_{datetime_tag()}"
     persistent_dir: Path = Path("log") / name
     persistent_dir.mkdir(parents=True, exist_ok=False)
 

@@ -17,7 +17,7 @@ from grammar_env.criterion import CoverageCriterion, Criterion, F1Criterion, Pro
 from grammar_env.grammar.binary_grammar import BinaryGrammar, BinaryGrammarFactory
 from grammar_env.grammar.unary_grammar import SupervisedUnaryGrammar, UnaryGrammar
 from env import Environment
-from grammar import CompleteBinGrammar
+from grammar import CompleteBinGrammar, BinGrammar
 from grammar_env.grammar_env import GrammarEnv
 from result_saver import ResultSaver
 from writer import Writer
@@ -93,7 +93,6 @@ class RolloutBuffer:
 class PPOConfig:
     # Grammar parameters
     num_non_terminals: int = 4  # Number of non-terminals
-    max_productions: int = 400  # Maximum number of productions
 
     # Criterion parameters
     criterion: str = "f1"  # Criterion to use for training
@@ -101,7 +100,6 @@ class PPOConfig:
     num_sentences_per_batch: int = 256  # Number of sentences to process per batch
 
     # Algorithm parameters
-    episodes_per_batch: int = 2  # Number of episodes to run per batch
     n_updates_per_iteration: int = 5  # Number of times to update actor/critic per iteration
     lr: float = 2e-4  # Learning rate of optimizer
     gamma: float = 0.99  # Discount factor to be applied when calculating Rewards-To-Go
@@ -123,6 +121,8 @@ class PPOConfig:
     # Network parameters
     hidden_dim: int = 512
     n_layer: int = 3
+    embedding_dim: int = 128
+    seq_n_layers: int = 2
 
 
 class PPO:
@@ -137,49 +137,44 @@ class PPO:
         self.writer: Writer = writer
         self.device: torch.device = device
         self.config = config
+        self.state_dim: int = config.num_non_terminals + 14
 
         torch.manual_seed(config.seed)
 
-        self.unary_grammar: UnaryGrammar = SupervisedUnaryGrammar(self.train_corpus)
-        self.binary_grammar_factory: BinaryGrammarFactory = BinaryGrammarFactory(
-            config.num_non_terminals, self.unary_grammar.num_pt
-        )
-        self.unary_grammar.to(self.device)
+        self.bin_grammar : BinGrammar = CompleteBinGrammar(
+            config.num_non_terminals, 14, device)
 
         self.result_saver: ResultSaver = ResultSaver(
             self.persistent_dir, self.writer,
             self.train_corpus, self.valid_corpus, self.device,
-            config.num_sentences_per_score, config.num_sentences_per_batch
+            config.num_sentences_per_score, config.max_num_steps,
+            self.bin_grammar
         )
 
         # Setup environment
         match config.criterion:
             case "prob":
                 self._criterion: Criterion = ProbabilityCriterion(
-                    self.train_corpus, self.device, -200.,
-                    config.num_sentences_per_score, config.num_sentences_per_batch
+                    self.train_corpus, self.device
                 )
             case "cov":
                 self._criterion: Criterion = CoverageCriterion(
-                    self.train_corpus, self.device,
-                    config.num_sentences_per_score, config.num_sentences_per_batch
+                    self.train_corpus, self.device
                 )
             case "f1":
                 self._criterion: Criterion = F1Criterion(
-                    self.train_corpus, self.device,
-                    config.num_sentences_per_score, config.num_sentences_per_batch
+                    self.train_corpus, self.device
                 )
             case _:
                 raise ValueError(f"Invalid criterion: {config.criterion}")
-        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, CompleteBinGrammar)
-        self.state_dim = self.env.num_r
-        self.action_dim = self.env.num_r
+        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, self.bin_grammar, self._criterion, 2.0, device)
 
         # Initialize actor and critic networks
         self.actor_critic = ActorCritic(  # ALG STEP 1
-            self.state_dim, self.action_dim, config.hidden_dim,
-            config.n_layer
+            self.state_dim, config.embedding_dim, config.seq_n_layers, config.hidden_dim,
+            self.bin_grammar.num_rules(), config.n_layer
         )
+        self.actor_critic.to(device)
 
         # Initialize optimizers for actor_critic
         self.optim = Adam(self.actor_critic.parameters(), lr=config.lr)
@@ -212,27 +207,26 @@ class PPO:
         :param total_timesteps: the total number of timesteps to train for
         """
         logger.info(
-            f"Learning... Running {self.config.max_productions} timesteps per episode, "
-            f"{self.config.episodes_per_batch} episodes per batch for a total of {total_timesteps} timesteps"
+            f"Learning... Running {self.config.max_num_steps} timesteps per episode, "
+            f"{self.config.num_sentences_per_batch} episodes per batch for a total of {total_timesteps} timesteps"
         )
         t_so_far: int = 0  # Timesteps simulated so far
         i_so_far: int = 0  # Iterations ran so far
         while t_so_far < total_timesteps:  # ALG STEP 2
             # ALG STEP 3, batch simulation
             # TODO
-            self.actor_critic.to(torch.device('cpu'))
+            #self.actor_critic.to(torch.device('cpu'))
             self.actor_critic.eval()
             with torch.no_grad():
-                self.rollout()
+                self.env.rollout(
+                    self.train_corpus, self.actor_critic,
+                    self.config.num_sentences_per_batch, self.config.max_num_steps)
+                batch_obs, batch_acts, batch_log_probs, batch_rtgs, ep_rtgs = self.env.collect_data_batch(self.config.gamma)
+                batch_lens: torch.Tensor = self.env.ep_len
             device = self.device
             self.actor_critic.to(device)
             self.actor_critic.train()
 
-            batch_obs: torch.Tensor = torch.from_numpy(self.env.state).to(device)
-            batch_acts: torch.Tensor = torch.from_numpy(self.env.actions).to(device)
-            batch_log_probs: torch.Tensor = torch.from_numpy(self.env.actions_log_probs).to(device)
-            batch_rtgs: torch.Tensor = torch.from_numpy(self.env.compute_rtgs()).to(device)
-            batch_lens: torch.Tensor = torch.from_numpy(self.env.ep_len).to(device)
 
             # Increment timesteps so far and iterations so far
             t_so_far += sum(batch_lens)
@@ -241,16 +235,19 @@ class PPO:
             # Logging timesteps so far and iterations so far
             self.logger['t_so_far'] = t_so_far
             self.logger['i_so_far'] = i_so_far
+            self.logger['batch_lens'] = batch_lens
+            self.logger['batch_rews'] = ep_rtgs
 
             # Calculate advantage at k-th iteration
-            _, _, V = self.actor_critic.evaluate(batch_obs, batch_acts)
-            A_k: torch.Tensor = batch_rtgs - V.detach()  # ALG STEP 5
+            with torch.no_grad():
+                _, _, V = self.actor_critic.evaluate(batch_obs, batch_acts)
+                A_k: torch.Tensor = batch_rtgs - V.detach()  # ALG STEP 5
 
             # One of the few tricks I use that isn't in the pseudocode. Normalizing advantages
             # isn't theoretically necessary, but in practice it decreases the variance of
             # our advantages and makes convergence much more stable and faster. I added this because
             # solving some environments was too unstable without it.
-            A_k: torch.Tensor = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
+                A_k: torch.Tensor = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
             # This is the loop where we update our network for some n epochs
             for _ in range(self.config.n_updates_per_iteration):  # ALG STEP 6 & 7
@@ -313,53 +310,6 @@ class PPO:
             str(path)
         )
 
-    def rollout(self):
-        """
-        Collect batch of data from simulation.
-        As PPO is an on-policy algorithm, we need to collect a fresh batch
-        of data each time we iterate the actor/critic networks.
-
-        :return: RolloutBuffer containing the batch data
-        """
-        # Batch data.
-
-        time_s = time.time()
-
-
-        # Sample sentences from the training corpus (sentences are padded to max length with index -1)
-        batch_sentences = self.train_corpus.get_dataloader(self.config.num_sentences_per_batch)
-
-        # Compute actual lengths (ignoring -1 values)
-        seq_lengths = torch.tensor(batch_sentences!=-1).sum(axis=1)
-
-        # Reset the environment.
-        self.env.reset(seq_lengths.max().item())
-        self.env.init_state(batch_sentences)
-
-        # Run an episode for max_timesteps_per_episode timesteps
-        ep_t: int = 0
-        for ep_t in range(self.config.max_num_steps):
-
-            # Calculate action and make a step in the env.
-            current_states, not_done = self.env.get_state()
-            action, log_prob, _ = self.actor_critic.act(torch.tensor(current_states[not_done]))
-            assert action.shape == log_prob.shape == (len(not_done),1)
-            padded_action = np.full(self.env.num_episodes, -1)
-            padded_action[not_done] = action.squeeze().cpu().numpy()
-            padded_log_prob = np.full(self.env.num_episodes, -1)
-            padded_log_prob[not_done] = log_prob.squeeze().cpu().numpy()
-            self.env.step(padded_action, padded_log_prob)
-
-            # If the environment tells us the episode is terminated, break
-            if self.env.stop():
-                break
-
-
-
-        # Log the episodic returns and episodic lengths in this batch.
-        self.logger['batch_rews'] = self.env.compute_rtgs()
-        self.logger['batch_lens'] = self.env.ep_len
-        logger.info(f"Rollout done. {self.config.episodes_per_batch} episodes ran in {time.time() - time_s: .2f} secs")
 
 
 
@@ -370,7 +320,7 @@ class PPO:
         t_so_far: int = self.logger['t_so_far']
         i_so_far: int = self.logger['i_so_far']
         avg_ep_lens: float = mean(self.logger['batch_lens'])
-        avg_ep_rews: float = mean([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
+        avg_ep_rews: float = min([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         min_ep_rews: float = min([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         max_ep_rews: float = max([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         avg_actor_loss: float = mean(self.logger['actor_losses'])
@@ -395,21 +345,9 @@ class PPO:
             }, commit=False
         )
 
-        if min_ep_rews >= self.config.min_ep_rews_threshold:
-            binary_grammar: BinaryGrammar = self.binary_grammar_factory.create(
-                self.env.state_to_reduced(self.env.state)
-            )
-            opt_binary_grammar: Optional[BinaryGrammar] = self._criterion.opt_binary_grammar
-
-            if opt_binary_grammar is not None:
-                self.result_saver.save(
-                    f"opt", i_so_far,
-                    opt_binary_grammar, self.unary_grammar, commit=False
-                )
-
-            self.result_saver.save(
+        self.result_saver.save(
                 f"last", i_so_far,
-                binary_grammar, self.unary_grammar, commit=True
+                self.actor_critic, commit=True
             )
         logger.info("\n")
 
