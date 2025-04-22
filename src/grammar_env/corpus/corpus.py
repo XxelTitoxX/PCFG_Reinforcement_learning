@@ -20,14 +20,15 @@ class SentenceDataset(Dataset):
     def __init__(self, sentences: list[Sentence]):
         self.raw_sentences : list[Sentence] = sentences
         self.pos_tags : list[list[int]] = [sentence.pos_tags for sentence in sentences]
+        self.gold_spans : list[list[tuple[int, int]]] = [sentence.start_end_spans for sentence in sentences]
     def __len__(self):
         return len(self.raw_sentences)
 
     def __getitem__(self, idx):
-        return self.pos_tags[idx], idx
+        return self.pos_tags[idx], self.gold_spans[idx]
     
 def collate_fn(batch):
-    data, indices = zip(*batch)  # Unzip into data and indices
+    data, spans = zip(*batch)  # Unzip into data and indices
 
     list_max_len = max(len(lst) for lst in data)  # Find max length in batch
     batch_size = len(data)
@@ -37,7 +38,7 @@ def collate_fn(batch):
     for i, lst in enumerate(data):
         padded_batch[i, :len(lst)] = np.array(lst)
 
-    return torch.tensor(padded_batch), torch.tensor(indices)
+    return torch.tensor(padded_batch), spans
 
 
 

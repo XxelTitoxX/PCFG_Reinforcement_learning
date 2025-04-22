@@ -13,12 +13,7 @@ from torch.optim import Adam
 
 from actor_critic import ActorCritic
 from grammar_env.corpus.corpus import Corpus
-from grammar_env.criterion import CoverageCriterion, Criterion, F1Criterion, ProbabilityCriterion
-from grammar_env.grammar.binary_grammar import BinaryGrammar, BinaryGrammarFactory
-from grammar_env.grammar.unary_grammar import SupervisedUnaryGrammar, UnaryGrammar
 from env import Environment
-from grammar import CompleteBinGrammar, BinGrammar
-from grammar_env.grammar_env import GrammarEnv
 from result_saver import ResultSaver
 from writer import Writer
 
@@ -98,9 +93,10 @@ class PPOConfig:
     criterion: str = "f1"  # Criterion to use for training
     num_sentences_per_score: int = 256  # Number of sentences used to score per criterion
     num_sentences_per_batch: int = 256  # Number of sentences to process per batch
+    num_epochs: int = 50
 
     # Algorithm parameters
-    n_updates_per_iteration: int = 5  # Number of times to update actor/critic per iteration
+    n_updates_per_iteration: int = 10  # Number of times to update actor/critic per iteration
     lr: float = 2e-4  # Learning rate of optimizer
     gamma: float = 0.99  # Discount factor to be applied when calculating Rewards-To-Go
     clip: float = 0.2  # Recommended 0.2, helps define the threshold to clip the ratio during SGA
@@ -119,10 +115,8 @@ class PPOConfig:
     min_ep_rews_threshold: float = 0.  # Minimum episodic rewards threshold to log the grammar
 
     # Network parameters
-    hidden_dim: int = 512
     n_layer: int = 3
     embedding_dim: int = 128
-    seq_n_layers: int = 2
 
 
 class PPO:
@@ -141,17 +135,17 @@ class PPO:
 
         torch.manual_seed(config.seed)
 
-        self.bin_grammar : BinGrammar = CompleteBinGrammar(
-            config.num_non_terminals, 14, device)
+        self.train_dataloader = train_corpus.get_dataloader(config.num_sentences_per_batch)
+        self.valid_dataloader = valid_corpus.get_dataloader(config.num_sentences_per_score)
 
         self.result_saver: ResultSaver = ResultSaver(
             self.persistent_dir, self.writer,
             self.train_corpus, self.valid_corpus, self.device,
             config.num_sentences_per_score, config.max_num_steps,
-            self.bin_grammar
         )
 
         # Setup environment
+        """
         match config.criterion:
             case "prob":
                 self._criterion: Criterion = ProbabilityCriterion(
@@ -167,12 +161,12 @@ class PPO:
                 )
             case _:
                 raise ValueError(f"Invalid criterion: {config.criterion}")
-        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, self.bin_grammar, self._criterion, 2.0, device)
+        """
+        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, 2.0, device)
 
         # Initialize actor and critic networks
         self.actor_critic = ActorCritic(  # ALG STEP 1
-            self.state_dim, config.embedding_dim, config.seq_n_layers, config.hidden_dim,
-            self.bin_grammar.num_rules(), config.n_layer
+            self.state_dim, config.embedding_dim, config.num_non_terminals, config.n_layer
         )
         self.actor_critic.to(device)
 
@@ -195,7 +189,8 @@ class PPO:
             'i_so_far': 0,  # iterations so far
             'batch_lens': [],  # episodic lengths in batch
             'batch_rews': [],  # episodic returns in batch
-            'actor_losses': [],  # losses of actor network in current iteration
+            'pos_actor_losses': [],  # losses of actor network in current iteration
+            'sym_actor_losses': [],  # losses of actor network in current iteration
             'critic_losses': [],  # losses of critic network in current iteration
         }
 
@@ -212,96 +207,110 @@ class PPO:
         )
         t_so_far: int = 0  # Timesteps simulated so far
         i_so_far: int = 0  # Iterations ran so far
-        while t_so_far < total_timesteps:  # ALG STEP 2
-            # ALG STEP 3, batch simulation
-            # TODO
-            #self.actor_critic.to(torch.device('cpu'))
-            self.actor_critic.eval()
-            with torch.no_grad():
-                self.env.rollout(
-                    self.train_corpus, self.actor_critic,
-                    self.config.num_sentences_per_batch, self.config.max_num_steps)
-                batch_obs, batch_acts, batch_log_probs, batch_rtgs, ep_rtgs = self.env.collect_data_batch(self.config.gamma)
-                batch_lens: torch.Tensor = self.env.ep_len
-            device = self.device
-            self.actor_critic.to(device)
-            self.actor_critic.train()
+
+        for epoch in range(self.config.num_epochs):
+            for batch_t_stc, batch_t_spans in self.train_dataloader:  # ALG STEP 2
+                if t_so_far >= total_timesteps:
+                    break
+                # ALG STEP 3, batch simulation
+                # TODO
+                #self.actor_critic.to(torch.device('cpu'))
+                self.actor_critic.eval()
+                with torch.no_grad():
+                    
+                    self.env.rollout(
+                        self.actor_critic, batch_t_stc, batch_t_spans)
+                    batch_obs, batch_rtgs, positions, positions_log_probs, symbols, symbols_log_probs, mask_position, mask_symbol, ep_rtgs = self.env.collect_data_batch(self.config.gamma)
+                    # NOTE: batch_obs and batch_rtgs contain one extra timestep at the end
+                    batch_lens: torch.Tensor = self.env.ep_len
+                device = self.device
+                self.actor_critic.to(device)
+                self.actor_critic.train()
 
 
-            # Increment timesteps so far and iterations so far
-            t_so_far += sum(batch_lens)
-            i_so_far += 1
+                # Increment timesteps so far and iterations so far
+                t_so_far += sum(batch_lens)
+                i_so_far += 1
 
-            # Logging timesteps so far and iterations so far
-            self.logger['t_so_far'] = t_so_far
-            self.logger['i_so_far'] = i_so_far
-            self.logger['batch_lens'] = batch_lens
-            self.logger['batch_rews'] = ep_rtgs
+                # Logging timesteps so far and iterations so far
+                self.logger['t_so_far'] = t_so_far
+                self.logger['i_so_far'] = i_so_far
+                self.logger['batch_lens'] = batch_lens
+                self.logger['batch_rews'] = ep_rtgs
 
-            # Calculate advantage at k-th iteration
-            with torch.no_grad():
-                _, _, V = self.actor_critic.evaluate(batch_obs, batch_acts)
-                A_k: torch.Tensor = batch_rtgs - V.detach()  # ALG STEP 5
+                # Calculate advantage at k-th iteration
+                with torch.no_grad():
+                    V = self.actor_critic.state_val(batch_obs)
+                    A_k: torch.Tensor = batch_rtgs - V.detach()  # ALG STEP 5
 
-            # One of the few tricks I use that isn't in the pseudocode. Normalizing advantages
-            # isn't theoretically necessary, but in practice it decreases the variance of
-            # our advantages and makes convergence much more stable and faster. I added this because
-            # solving some environments was too unstable without it.
-                A_k: torch.Tensor = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
+                # One of the few tricks I use that isn't in the pseudocode. Normalizing advantages
+                # isn't theoretically necessary, but in practice it decreases the variance of
+                # our advantages and makes convergence much more stable and faster. I added this because
+                # solving some environments was too unstable without it.
+                    A_k: torch.Tensor = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
-            # This is the loop where we update our network for some n epochs
-            for _ in range(self.config.n_updates_per_iteration):  # ALG STEP 6 & 7
-                # Calculate V_phi and pi_theta(a_t | s_t)
-                curr_log_probs, dist_entropy, V = self.actor_critic.evaluate(batch_obs, batch_acts)
+                    P_A_k: torch.Tensor = A_k[mask_position]
+                    S_A_k: torch.Tensor = A_k[mask_symbol]
 
-                # Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
-                # NOTE: we just subtract the logs, which is the same as
-                # dividing the values and then canceling the log with e^log.
-                # For why, we use log probabilities instead of actual probabilities,
-                # here's a great explanation:
-                # https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
-                # TL;DR makes gradient ascent easier behind the scenes.
-                ratios: torch.Tensor = torch.exp(curr_log_probs - batch_log_probs)
+                # This is the loop where we update our network for some n epochs
+                for _ in range(self.config.n_updates_per_iteration):  # ALG STEP 6 & 7
+                    # Calculate V_phi and pi_theta(a_t | s_t)
+                    curr_pos_log_probs, pos_dist_entropy, curr_sym_log_probs, sym_dist_entropy, _ = self.actor_critic.evaluate(batch_obs[mask_position], positions, symbols)
+                    V = self.actor_critic.state_val(batch_obs)
 
-                # Calculate surrogate losses.
-                surr1: torch.Tensor = ratios * A_k
-                surr2: torch.Tensor = torch.clamp(ratios, 1 - self.config.clip, 1 + self.config.clip) * A_k
+                    # Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
+                    # NOTE: we just subtract the logs, which is the same as
+                    # dividing the values and then canceling the log with e^log.
+                    # For why, we use log probabilities instead of actual probabilities,
+                    # here's a great explanation:
+                    # https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
+                    # TL;DR makes gradient ascent easier behind the scenes.
+                    pos_ratios: torch.Tensor = torch.exp(curr_pos_log_probs - positions_log_probs)
+                    sym_ratios: torch.Tensor = torch.exp(curr_sym_log_probs - symbols_log_probs)
 
-                # Calculate actor and critic losses.
-                # NOTE: we take the negative min of the surrogate losses because we're trying to maximize
-                # the performance function, but Adam minimizes the loss. So minimizing the negative
-                # performance function maximizes it.
-                actor_loss: torch.Tensor = -(torch.min(surr1, surr2) + self.config.entropy_weight * dist_entropy).mean()
-                critic_loss: torch.Tensor = F.mse_loss(V, batch_rtgs)
-                loss: torch.Tensor = self.config.actor_weight * actor_loss + self.config.critic_weight * critic_loss
-                assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"
+                    # Calculate surrogate losses.
+                    pos_surr1: torch.Tensor = pos_ratios * P_A_k
+                    pos_surr2: torch.Tensor = torch.clamp(pos_ratios, 1 - self.config.clip, 1 + self.config.clip) * P_A_k
+                    sym_surr1: torch.Tensor = sym_ratios * S_A_k
+                    sym_surr2: torch.Tensor = torch.clamp(sym_ratios, 1 - self.config.clip, 1 + self.config.clip) * S_A_k
 
-                # Calculate gradients and perform backward propagation for actor_critic network
-                self.optim.zero_grad()
-                loss.backward()
-                self.optim.step()
+                    # Calculate actor and critic losses.
+                    # NOTE: we take the negative min of the surrogate losses because we're trying to maximize
+                    # the performance function, but Adam minimizes the loss. So minimizing the negative
+                    # performance function maximizes it.
+                    pos_actor_loss: torch.Tensor = -(torch.min(pos_surr1, pos_surr2) + self.config.entropy_weight * pos_dist_entropy).mean()
+                    sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + self.config.entropy_weight * sym_dist_entropy).mean()
+                    critic_loss: torch.Tensor = F.mse_loss(V, batch_rtgs)
+                    loss: torch.Tensor = self.config.actor_weight * (pos_actor_loss+sym_actor_loss)/2 + self.config.critic_weight * critic_loss
+                    assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"
 
-                # Log actor and critic loss
-                self.logger['actor_losses'].append(actor_loss.item())
-                self.logger['critic_losses'].append(critic_loss.item())
+                    # Calculate gradients and perform backward propagation for actor_critic network
+                    self.optim.zero_grad()
+                    loss.backward()
+                    self.optim.step()
 
-            # Print a summary of our training so far
-            self._log_summary()
+                    # Log actor and critic loss
+                    self.logger['pos_actor_losses'].append(pos_actor_loss.item())
+                    self.logger['sym_actor_losses'].append(sym_actor_loss.item())
+                    self.logger['critic_losses'].append(critic_loss.item())
 
-            # Save our model if it's time
-            if i_so_far % self.config.save_freq == 0:
-                path: Path = self.persistent_dir / "torch" / f"actor_critic_{i_so_far}.pth"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(
-                    self.actor_critic.state_dict(),
-                    str(path)
-                )
+                # Print a summary of our training so far
+                self._log_summary()
 
-            if i_so_far % self.config.entropy_weight_decay_freq == 0:
-                self.config.entropy_weight = max(
-                    self.config.entropy_weight * self.config.entropy_weight_decay,
-                    self.config.entropy_weight_min
-                )
+                # Save our model if it's time
+                if i_so_far % self.config.save_freq == 0:
+                    path: Path = self.persistent_dir / "torch" / f"actor_critic_{i_so_far}.pth"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(
+                        self.actor_critic.state_dict(),
+                        str(path)
+                    )
+
+                if i_so_far % self.config.entropy_weight_decay_freq == 0:
+                    self.config.entropy_weight = max(
+                        self.config.entropy_weight * self.config.entropy_weight_decay,
+                        self.config.entropy_weight_min
+                    )
 
         path: Path = self.persistent_dir / "torch" / f"actor_critic_{i_so_far}.pth"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,10 +329,11 @@ class PPO:
         t_so_far: int = self.logger['t_so_far']
         i_so_far: int = self.logger['i_so_far']
         avg_ep_lens: float = mean(self.logger['batch_lens'])
-        avg_ep_rews: float = min([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
+        avg_ep_rews: float = mean([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         min_ep_rews: float = min([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         max_ep_rews: float = max([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
-        avg_actor_loss: float = mean(self.logger['actor_losses'])
+        avg_pos_actor_loss: float = mean(self.logger['pos_actor_losses'])
+        avg_sym_actor_loss: float = mean(self.logger['sym_actor_losses'])
         acg_critic_loss: float = mean(self.logger['critic_losses'])
 
         logger.info(f"iter: {i_so_far}, timesteps so far: {t_so_far}, iteration took {delta_t:.2f} secs")
@@ -332,7 +342,7 @@ class PPO:
             f"avg episodic rewards: {avg_ep_rews:.5f}, min episodic rewards: {min_ep_rews:.5f}, "
             f"max episodic rewards: {max_ep_rews:.5f}"
         )
-        logger.info(f"avg actor loss: {avg_actor_loss:.5f}, avg critic loss: {acg_critic_loss:.5f}")
+        logger.info(f"avg position actor loss: {avg_pos_actor_loss:.5f}, avg symbol actor loss:{avg_sym_actor_loss:.5f}, avg critic loss: {acg_critic_loss:.5f}")
         self.writer.log(
             {
                 'delta_t': delta_t,
@@ -340,7 +350,8 @@ class PPO:
                 'avg_ep_rews': avg_ep_rews,
                 'min_ep_rews': min_ep_rews,
                 'max_ep_rews': max_ep_rews,
-                'avg_actor_loss': avg_actor_loss,
+                'avg_pos_actor_loss': avg_pos_actor_loss,
+                'avg_sym_actor_loss': avg_sym_actor_loss,
                 'avg_critic_loss': acg_critic_loss
             }, commit=False
         )

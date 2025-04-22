@@ -96,6 +96,9 @@ class GoldSpan:
 
     def __lt__(self, other):
         return (self.start, self.end, self.tag) < (other.start, other.end, other.tag)
+    
+    def start_end(self):
+        return (self.start, self.end)
 
 
 def sanitize(symbol: str) -> str:
@@ -166,6 +169,8 @@ class Sentence:
     This is used to calculate the oracle f1 score.
     """
     pos_tags: list[int] = field(init=False)
+    start_end_spans: list[tuple[int, int]] = field(init=False)
+
 
     def __post_init__(self):
         self.actions: list[Action] = get_actions(self.raw)
@@ -181,6 +186,7 @@ class Sentence:
                     self.actions_sanitized.append(action)
 
         self._initialize_gold_and_sr()
+        self._initialize_start_end_spans()
 
         self.__pos_tags()
 
@@ -265,6 +271,11 @@ class Sentence:
         self.gold_spans_all.sort()
         self.gold_spans.sort()
         self.tree_sr_spans.sort()
+
+    def _initialize_start_end_spans(self) -> None:
+        self.start_end_spans: list[tuple[int, int]] = []
+        for span in self.gold_spans:
+            self.start_end_spans.append(span.start_end())
 
     def tree(self) -> str:
         """

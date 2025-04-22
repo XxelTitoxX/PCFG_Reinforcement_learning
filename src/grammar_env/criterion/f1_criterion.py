@@ -1,8 +1,9 @@
 import torch
 
-from grammar_env.corpus.corpus import Corpus
+
 from grammar_env.criterion.criterion import Criterion
 from env import Environment
+
 
 __all__ = ['F1Criterion']
 
@@ -24,26 +25,24 @@ def f1_score(
 
 class F1Criterion(Criterion):
     def __init__(
-            self, corpus: Corpus, device: torch.device,
+            self, device: torch.device,
     ):
         super().__init__(
-            corpus, device
+            device
         )
 
     def score_sentences(
             self, env : Environment
     ) -> torch.Tensor:
         pred_spans: list[list[tuple[int, int]]] = env.spans_lists
+        gold_spans: list[set[tuple[int, int]]] = env.gt_spans
 
         f1_scores: list[float] = []
-        for s_idx, s_pred_spans, s_len in zip(env.sentence_idx, pred_spans, env.sentence_lengths):
-            gold_spans: set[tuple[int, int]] = set(
-                (gold_span.start, gold_span.end)
-                for gold_span in self.corpus.sentences[s_idx].gold_spans
-            )
-            s_pred_spans_set: set[tuple[int, int]] = set(s_pred_spans)
+        for gt_spans, s_pred_spans, s_len in zip(gold_spans, pred_spans, env.sentence_lengths):
+            
+            pred_spans_set: set[tuple[int, int]] = set(s_pred_spans)
             whole_span: tuple[int, int] = (0, s_len - 1)
-            f1_scores.append(f1_score(gold_spans, s_pred_spans_set, whole_span))
+            f1_scores.append(f1_score(gt_spans, pred_spans_set, whole_span))
         f1_scores = torch.tensor(f1_scores, device=self.device)
         self.update_score(f1_scores)
         return f1_scores

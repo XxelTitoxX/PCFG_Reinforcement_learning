@@ -63,11 +63,8 @@ if __name__ == '__main__':
     parser.add_argument("--num_sentences_per_score", type=int)
     parser.add_argument("--num_sentences_per_batch", type=int)
     parser.add_argument("--max_num_steps", type=int)
-
-    parser.add_argument("--embedding_dim", type=int)
-    parser.add_argument("--seq_n_layers", type=int)
     
-    parser.add_argument("--hidden_dim", type=int)
+    parser.add_argument("--embedding_dim", type=int)
     parser.add_argument("--n_layer", type=int)
 
     args: argparse.Namespace = parser.parse_args()

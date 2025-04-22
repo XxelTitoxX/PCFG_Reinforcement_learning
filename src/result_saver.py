@@ -8,8 +8,6 @@ from dataclasses_json import dataclass_json
 
 from grammar_env.corpus.corpus import Corpus
 from grammar_env.criterion import CoverageCriterion, Criterion, F1Criterion, ProbabilityCriterion
-from grammar_env.grammar.binary_grammar import BinaryGrammar
-from grammar_env.grammar.unary_grammar import UnaryGrammar
 from actor_critic import ActorCritic
 from env import Environment
 from writer import Writer
@@ -34,7 +32,7 @@ class ResultSaver:
     def __init__(
             self, persistent_dir: Path, writer: Writer,
             train_corpus: Corpus, valid_corpus: Corpus, device: torch.device,
-            num_sentences_per_score: int, max_num_steps: int, binary_grammar: BinaryGrammar
+            num_sentences_per_score: int, max_num_steps: int
     ):
         self.persistent_dir: Path = persistent_dir
         self.writer: Writer = writer
@@ -44,49 +42,50 @@ class ResultSaver:
         self.num_sentences_per_score: int = num_sentences_per_score
         self.max_num_steps: int = max_num_steps
 
-        self.train_f1_criterion: Criterion = F1Criterion(
-            train_corpus, device
-        )
-        self.train_probability_criterion: Criterion = ProbabilityCriterion(
-            train_corpus, device
-        )
-        self.train_coverage_criterion: Criterion = CoverageCriterion(
-            train_corpus, device
-        )
-        self.valid_f1_criterion: Criterion = F1Criterion(
-            valid_corpus, device
-        )
-        self.valid_probability_criterion: Criterion = ProbabilityCriterion(
-            valid_corpus, device
-        )
-        self.valid_coverage_criterion: Criterion = CoverageCriterion(
-            valid_corpus, device
-        )
+        self.train_dataloader: torch.utils.data.DataLoader = train_corpus.get_dataloader(self.num_sentences_per_score)
+        self.valid_dataloader: torch.utils.data.DataLoader = valid_corpus.get_dataloader(self.num_sentences_per_score)
+        self.train_iterator = iter(self.train_dataloader)
+        self.valid_iterator = iter(self.valid_dataloader)
 
-        self.train_env: Environment = Environment(num_sentences_per_score, max_num_steps, binary_grammar, self.train_f1_criterion, 0.0, device)
-        self.valid_env: Environment = Environment(num_sentences_per_score, max_num_steps, binary_grammar, self.valid_f1_criterion, 0.0, device)
+        self.train_f1_criterion: Criterion = F1Criterion(device)
+        self.train_probability_criterion: Criterion = ProbabilityCriterion(device)
+        self.train_coverage_criterion: Criterion = CoverageCriterion(device)
+        self.valid_f1_criterion: Criterion = F1Criterion(device)
+        self.valid_probability_criterion: Criterion = ProbabilityCriterion(device)
+        self.valid_coverage_criterion: Criterion = CoverageCriterion(device)
+
+        self.train_env: Environment = Environment(num_sentences_per_score, max_num_steps, 0.0, device)
+        self.valid_env: Environment = Environment(num_sentences_per_score, max_num_steps, 0.0, device)
 
     def save(
             self, name: str, i_so_far: int, actor_critic: ActorCritic,
             commit: bool
     ):
         with torch.no_grad():
-            self.train_env.rollout(self.train_corpus, actor_critic, self.num_sentences_per_score, self.max_num_steps)
-            self.valid_env.rollout(self.valid_corpus, actor_critic, self.num_sentences_per_score, self.max_num_steps)
-            self.train_env.criterion = self.train_f1_criterion
-            self.valid_env.criterion = self.valid_f1_criterion
-            train_f1: float = torch.mean(self.train_env.success_reward()).item()
-            valid_f1: float = torch.mean(self.valid_env.success_reward()).item()
+            try:
+                train_sentences, train_spans = next(self.train_iterator)
+                if train_sentences.shape[0] != self.num_sentences_per_score:
+                    raise StopIteration
+            except StopIteration:
+                self.train_iterator = iter(self.train_dataloader)
+                train_sentences, train_spans = next(self.train_iterator)
+            try:
+                valid_sentences, valid_spans = next(self.valid_iterator)
+                if valid_sentences.shape[0] != self.num_sentences_per_score:
+                    raise StopIteration
+            except StopIteration:
+                self.valid_iterator = iter(self.valid_dataloader)
+                valid_sentences, valid_spans = next(self.valid_iterator)
+            self.train_env.rollout(actor_critic, train_sentences, train_spans)
+            self.valid_env.rollout(actor_critic, valid_sentences, valid_spans)
+            train_f1: float = torch.mean(self.train_f1_criterion.score_sentences(self.train_env)).item()
+            valid_f1: float = torch.mean(self.valid_f1_criterion.score_sentences(self.valid_env)).item()
 
-            self.train_env.criterion = self.train_probability_criterion
-            self.valid_env.criterion = self.valid_probability_criterion
-            train_prob: float = torch.mean(self.train_env.success_reward()).item()
-            valid_prob: float = torch.mean(self.valid_env.success_reward()).item()
-
-            self.train_env.criterion = self.train_coverage_criterion
-            self.valid_env.criterion = self.valid_coverage_criterion
-            train_cov: float = torch.mean(self.train_env.success_reward()).item()
-            valid_cov: float = torch.mean(self.valid_env.success_reward()).item()
+            train_prob: float = torch.mean(self.train_probability_criterion.score_sentences(self.train_env)).item()
+            valid_prob: float = torch.mean(self.valid_probability_criterion.score_sentences(self.valid_env)).item()
+            
+            train_cov: float = torch.mean(self.train_coverage_criterion.score_sentences(self.train_env)).item()
+            valid_cov: float = torch.mean(self.valid_coverage_criterion.score_sentences(self.valid_env)).item()
 
             result: Result = Result(
                 train_f1=train_f1, train_prob=train_prob, train_cov=train_cov,

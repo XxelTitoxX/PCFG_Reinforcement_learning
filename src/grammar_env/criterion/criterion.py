@@ -1,10 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Optional, final
 
-import numpy as np
 import torch
 
-from grammar_env.corpus.corpus import Corpus
 from actor_critic import ActorCritic
 
 __all__ = ['Criterion']
@@ -13,9 +11,8 @@ __all__ = ['Criterion']
 
 class Criterion(ABC):
     def __init__(
-            self, corpus: Corpus, device: torch.device
+            self, device: torch.device
     ):
-        self.corpus: Corpus = corpus
         self.device: torch.device = device
 
         self.opt_model: Optional[ActorCritic] = None

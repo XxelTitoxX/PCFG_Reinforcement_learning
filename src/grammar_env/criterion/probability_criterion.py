@@ -1,9 +1,7 @@
 from logging import getLogger
 
 import torch
-import numpy as np
 
-from grammar_env.corpus.corpus import Corpus
 from grammar_env.criterion.criterion import Criterion
 from env import Environment
 
@@ -14,16 +12,23 @@ logger = getLogger(__name__)
 
 class ProbabilityCriterion(Criterion):
     def __init__(
-            self, corpus: Corpus, device: torch.device
+            self, device: torch.device
     ):
         super().__init__(
-            corpus, device
+            device
         )
 
     def score_sentences(
         self, env: Environment
 ) -> torch.Tensor:
-        sentence_parsing_log_probs = torch.sum(env.done[:, None] * env.rew * env.actions_log_probs, dim=1) + (~env.done) * float('-inf')
+        log_probs = env.positions_log_probs + env.symbols_log_probs
+        batch_size, max_len = log_probs.shape
+        mask = torch.arange(max_len, device=env.device).unsqueeze(0).expand(batch_size, -1) >= env.ep_len.unsqueeze(1)
+        log_probs[mask] = 0.
+
+        not_parsed_probs = torch.zeros(batch_size, device=env.device)
+        not_parsed_probs[~env.success()] = float('-inf')
+        sentence_parsing_log_probs = torch.sum(log_probs, dim=1) + not_parsed_probs
         parsing_probs = torch.exp(sentence_parsing_log_probs)
         self.update_score(parsing_probs)
         return parsing_probs
