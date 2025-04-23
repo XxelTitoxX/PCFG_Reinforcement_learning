@@ -76,8 +76,8 @@ class ResultSaver:
             except StopIteration:
                 self.valid_iterator = iter(self.valid_dataloader)
                 valid_sentences, valid_spans = next(self.valid_iterator)
-            self.train_env.rollout(actor_critic, train_sentences, train_spans)
-            self.valid_env.rollout(actor_critic, valid_sentences, valid_spans)
+            self.train_env.rollout(actor_critic, train_sentences, train_spans, evaluate=True)
+            self.valid_env.rollout(actor_critic, valid_sentences, valid_spans, evaluate=True)
             train_f1: float = torch.mean(self.train_f1_criterion.score_sentences(self.train_env)).item()
             valid_f1: float = torch.mean(self.valid_f1_criterion.score_sentences(self.valid_env)).item()
 

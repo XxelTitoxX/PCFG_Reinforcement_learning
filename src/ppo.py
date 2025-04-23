@@ -194,6 +194,11 @@ class PPO:
             'critic_losses': [],  # losses of critic network in current iteration
         }
 
+    def pos_tags_to_symbols(self, pos_tags: torch.Tensor) -> torch.Tensor:
+        mask = pos_tags != -1
+        symbols = pos_tags + mask * self.config.num_non_terminals
+        return symbols
+
     def learn(self, total_timesteps: int) -> None:
         """
         Train the actor and critic networks.
@@ -219,7 +224,7 @@ class PPO:
                 with torch.no_grad():
                     
                     self.env.rollout(
-                        self.actor_critic, batch_t_stc, batch_t_spans)
+                        self.actor_critic, self.pos_tags_to_symbols(batch_t_stc), batch_t_spans)
                     batch_obs, batch_rtgs, positions, positions_log_probs, symbols, symbols_log_probs, mask_position, mask_symbol, ep_rtgs = self.env.collect_data_batch(self.config.gamma)
                     # NOTE: batch_obs and batch_rtgs contain one extra timestep at the end
                     batch_lens: torch.Tensor = self.env.ep_len
