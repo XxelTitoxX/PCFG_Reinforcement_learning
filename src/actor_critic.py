@@ -64,7 +64,7 @@ def map_scores_to_sentences(embedding_pairs_scores: torch.Tensor, sequence_lengt
 
 class ActorCritic(nn.Module):
     def __init__(
-            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int
+            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int
     ):
         super().__init__()
 
@@ -77,7 +77,7 @@ class ActorCritic(nn.Module):
 
         self.state_encoder: EnhancedTransformerEmbedding = EnhancedTransformerEmbedding(state_dim=state_dim, embedding_dim=embedding_dim,
                                                             num_layers=n_layer,
-                                                            max_seq_len=60, num_heads=2, dropout=0.1
+                                                            max_seq_len=60, num_heads=num_heads, dropout=0.0
                                                           )
 
         # discrete actor

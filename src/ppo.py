@@ -116,6 +116,7 @@ class PPOConfig:
 
     # Network parameters
     n_layer: int = 3
+    n_head: int = 4
     embedding_dim: int = 128
 
 
@@ -162,11 +163,11 @@ class PPO:
             case _:
                 raise ValueError(f"Invalid criterion: {config.criterion}")
         """
-        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, 2.0, device)
+        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, 0.0, device)
 
         # Initialize actor and critic networks
         self.actor_critic = ActorCritic(  # ALG STEP 1
-            self.state_dim, config.embedding_dim, config.num_non_terminals, config.n_layer
+            self.state_dim, config.embedding_dim, config.num_non_terminals, config.n_layer, config.n_head
         )
         self.actor_critic.to(device)
 
@@ -192,6 +193,8 @@ class PPO:
             'pos_actor_losses': [],  # losses of actor network in current iteration
             'sym_actor_losses': [],  # losses of actor network in current iteration
             'critic_losses': [],  # losses of critic network in current iteration
+            'pos_entropy': [],  # entropy of actor network in current iteration
+            'sym_entropy': [],  # entropy of actor network in current iteration
         }
 
     def pos_tags_to_symbols(self, pos_tags: torch.Tensor) -> torch.Tensor:
@@ -242,6 +245,12 @@ class PPO:
                 self.logger['i_so_far'] = i_so_far
                 self.logger['batch_lens'] = batch_lens
                 self.logger['batch_rews'] = ep_rtgs
+                one_hot_positions = F.one_hot(positions.long(), num_classes=60).float()
+                positions_histogram = one_hot_positions.sum(dim=0)
+                one_hot_symbols = F.one_hot(symbols.long(), num_classes=self.config.num_non_terminals).float()
+                symbols_histogram = one_hot_symbols.sum(dim=0)
+                logger.info(f"positions histogram: {positions_histogram}")
+                logger.info(f"symbols histogram: {symbols_histogram}")
 
                 # Calculate advantage at k-th iteration
                 with torch.no_grad():
@@ -298,6 +307,8 @@ class PPO:
                     self.logger['pos_actor_losses'].append(pos_actor_loss.item())
                     self.logger['sym_actor_losses'].append(sym_actor_loss.item())
                     self.logger['critic_losses'].append(critic_loss.item())
+                    self.logger['pos_entropy'].append(pos_dist_entropy.mean().item())
+                    self.logger['sym_entropy'].append(sym_dist_entropy.mean().item())
 
                 # Print a summary of our training so far
                 self._log_summary()
@@ -340,6 +351,8 @@ class PPO:
         avg_pos_actor_loss: float = mean(self.logger['pos_actor_losses'])
         avg_sym_actor_loss: float = mean(self.logger['sym_actor_losses'])
         acg_critic_loss: float = mean(self.logger['critic_losses'])
+        avg_pos_entropy: float = mean(self.logger['pos_entropy'])
+        avg_sym_entropy: float = mean(self.logger['sym_entropy'])
 
         logger.info(f"iter: {i_so_far}, timesteps so far: {t_so_far}, iteration took {delta_t:.2f} secs")
         logger.info(
@@ -348,6 +361,10 @@ class PPO:
             f"max episodic rewards: {max_ep_rews:.5f}"
         )
         logger.info(f"avg position actor loss: {avg_pos_actor_loss:.5f}, avg symbol actor loss:{avg_sym_actor_loss:.5f}, avg critic loss: {acg_critic_loss:.5f}")
+        logger.info(
+            f"avg position entropy: {avg_pos_entropy:.5f}, "
+            f"avg symbol entropy: {avg_sym_entropy:.5f}"
+        )
         self.writer.log(
             {
                 'delta_t': delta_t,
@@ -357,7 +374,10 @@ class PPO:
                 'max_ep_rews': max_ep_rews,
                 'avg_pos_actor_loss': avg_pos_actor_loss,
                 'avg_sym_actor_loss': avg_sym_actor_loss,
-                'avg_critic_loss': acg_critic_loss
+                'avg_critic_loss': acg_critic_loss,
+                'avg_pos_entropy': avg_pos_entropy,
+                'avg_sym_entropy': avg_sym_entropy,
+
             }, commit=False
         )
 
