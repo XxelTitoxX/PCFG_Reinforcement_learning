@@ -217,7 +217,7 @@ class Environment:
             batch_states += self.state[i, :self.ep_len[i]+1, :].tolist()
             batch_positions += self.positions[i, :self.ep_len[i]].tolist()
             batch_positions_log_probs += self.positions_log_probs[i, :self.ep_len[i]].tolist()
-            batch_rewards += rews_to_go[i, :self.ep_len[i]+1].tolist()
+            batch_rewards += (rews_to_go[i, :self.ep_len[i]+1]).tolist()
             batch_symbols += self.symbols[i, :self.ep_len[i]].tolist()
             batch_symbols_log_probs += self.symbols_log_probs[i, :self.ep_len[i]].tolist()
             mask_position += [1] * self.ep_len[i] + [0]

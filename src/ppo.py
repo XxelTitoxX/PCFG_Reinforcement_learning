@@ -102,7 +102,7 @@ class PPOConfig:
     clip: float = 0.2  # Recommended 0.2, helps define the threshold to clip the ratio during SGA
     actor_weight: float = 1.  # Weight of the actor loss
     critic_weight: float = 0.5  # Weight of the critic loss
-    entropy_weight: float = 0.05  # Weight of the entropy loss
+    entropy_weight: float = 0.02  # Weight of the entropy loss
     entropy_weight_decay: float = 0.9  # Decay of the entropy weight
     entropy_weight_min: float = 0.01  # Minimum entropy weight
     entropy_weight_decay_freq: int = 5  # How often to decay the entropy weight
@@ -163,7 +163,7 @@ class PPO:
             case _:
                 raise ValueError(f"Invalid criterion: {config.criterion}")
         """
-        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, 0.0, device)
+        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, 1.0, device)
 
         # Initialize actor and critic networks
         self.actor_critic = ActorCritic(  # ALG STEP 1
@@ -190,6 +190,7 @@ class PPO:
             'i_so_far': 0,  # iterations so far
             'batch_lens': [],  # episodic lengths in batch
             'batch_rews': [],  # episodic returns in batch
+            'advantages': [],  # advantages in current iteration
             'pos_actor_losses': [],  # losses of actor network in current iteration
             'sym_actor_losses': [],  # losses of actor network in current iteration
             'critic_losses': [],  # losses of critic network in current iteration
@@ -265,6 +266,7 @@ class PPO:
 
                     P_A_k: torch.Tensor = A_k[mask_position]
                     S_A_k: torch.Tensor = A_k[mask_symbol]
+                    self.logger['advantages'] = A_k
 
                 # This is the loop where we update our network for some n epochs
                 for _ in range(self.config.n_updates_per_iteration):  # ALG STEP 6 & 7
@@ -301,6 +303,8 @@ class PPO:
                     # Calculate gradients and perform backward propagation for actor_critic network
                     self.optim.zero_grad()
                     loss.backward()
+                    # Clip gradients to prevent exploding gradients
+                    torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), 0.5)
                     self.optim.step()
 
                     # Log actor and critic loss
@@ -348,6 +352,7 @@ class PPO:
         avg_ep_rews: float = mean([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         min_ep_rews: float = min([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
         max_ep_rews: float = max([sum(ep_rews) for ep_rews in self.logger['batch_rews']])
+        avg_advantages = mean(abs(self.logger['advantages']))
         avg_pos_actor_loss: float = mean(self.logger['pos_actor_losses'])
         avg_sym_actor_loss: float = mean(self.logger['sym_actor_losses'])
         acg_critic_loss: float = mean(self.logger['critic_losses'])
@@ -359,6 +364,7 @@ class PPO:
             f"avg episodic len: {avg_ep_lens}, "
             f"avg episodic rewards: {avg_ep_rews:.5f}, min episodic rewards: {min_ep_rews:.5f}, "
             f"max episodic rewards: {max_ep_rews:.5f}"
+            f", avg advantages: {avg_advantages:.5f}"
         )
         logger.info(f"avg position actor loss: {avg_pos_actor_loss:.5f}, avg symbol actor loss:{avg_sym_actor_loss:.5f}, avg critic loss: {acg_critic_loss:.5f}")
         logger.info(
@@ -372,13 +378,14 @@ class PPO:
                 'avg_ep_rews': avg_ep_rews,
                 'min_ep_rews': min_ep_rews,
                 'max_ep_rews': max_ep_rews,
+                'avg_abs_advantages': avg_advantages,
                 'avg_pos_actor_loss': avg_pos_actor_loss,
                 'avg_sym_actor_loss': avg_sym_actor_loss,
                 'avg_critic_loss': acg_critic_loss,
                 'avg_pos_entropy': avg_pos_entropy,
                 'avg_sym_entropy': avg_sym_entropy,
 
-            }, commit=False
+            }, commit=True
         )
 
         self.result_saver.save(
@@ -388,5 +395,8 @@ class PPO:
         logger.info("\n")
 
         # Reset batch-specific logging data
-        self.logger['actor_losses'] = []
+        self.logger['pos_actor_losses'] = []
+        self.logger['sym_actor_losses'] = []
         self.logger['critic_losses'] = []
+        self.logger['pos_entropy'] = []
+        self.logger['sym_entropy'] = []
