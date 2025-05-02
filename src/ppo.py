@@ -87,25 +87,25 @@ class RolloutBuffer:
 @dataclass
 class PPOConfig:
     # Grammar parameters
-    num_non_terminals: int = 4  # Number of non-terminals
+    num_non_terminals: int = 6  # Number of non-terminals
 
     # Criterion parameters
     criterion: str = "f1"  # Criterion to use for training
     num_sentences_per_score: int = 256  # Number of sentences used to score per criterion
-    num_sentences_per_batch: int = 256  # Number of sentences to process per batch
+    num_sentences_per_batch: int = 32  # Number of sentences to process per batch
     num_epochs: int = 50
 
     # Algorithm parameters
     n_updates_per_iteration: int = 10  # Number of times to update actor/critic per iteration
     lr: float = 2e-4  # Learning rate of optimizer
-    gamma: float = 0.99  # Discount factor to be applied when calculating Rewards-To-Go
+    gamma: float = 0.9  # Discount factor to be applied when calculating Rewards-To-Go
     clip: float = 0.2  # Recommended 0.2, helps define the threshold to clip the ratio during SGA
     actor_weight: float = 1.  # Weight of the actor loss
     critic_weight: float = 0.5  # Weight of the critic loss
-    entropy_weight: float = 0.02  # Weight of the entropy loss
-    entropy_weight_decay: float = 0.9  # Decay of the entropy weight
+    entropy_weight: float = 0.05  # Weight of the entropy loss
+    entropy_weight_decay: float = 0.98  # Decay of the entropy weight
     entropy_weight_min: float = 0.01  # Minimum entropy weight
-    entropy_weight_decay_freq: int = 5  # How often to decay the entropy weight
+    entropy_weight_decay_freq: int = 10  # How often to decay the entropy weight
 
     max_num_steps: int = 100  # Maximum number of steps to run in the environment
 
@@ -115,9 +115,9 @@ class PPOConfig:
     min_ep_rews_threshold: float = 0.  # Minimum episodic rewards threshold to log the grammar
 
     # Network parameters
-    n_layer: int = 3
-    n_head: int = 4
-    embedding_dim: int = 128
+    n_layer: int = 1
+    n_head: int = 2
+    embedding_dim: int = 64
 
 
 class PPO:
@@ -202,6 +202,19 @@ class PPO:
         mask = pos_tags != -1
         symbols = pos_tags + mask * self.config.num_non_terminals
         return symbols
+    
+    def rule_mask_loss(self, rule_mask: torch.Tensor, sum_objective:float) -> torch.Tensor:
+        """
+        Calculate the loss for the rule mask.
+        The aim is to limit the number RHS that an abstract symbol can produce to enforce clustering and compression.
+        The sum of weights for each LHS should be as close to sum objective as possible.
+        """
+        # Calculate the sum of weights for each LHS
+        lhs_weights = torch.sum(torch.exp(rule_mask), dim=(1,2)) # Sum weights over RHS. Exponential to go from logits to weights.
+        # Calculate the loss as the mean squared error between lhs_weights and sum_objective
+        loss = F.mse_loss(lhs_weights, sum_objective)
+        return loss
+
 
     def learn(self, total_timesteps: int) -> None:
         """
@@ -295,7 +308,7 @@ class PPO:
                     # the performance function, but Adam minimizes the loss. So minimizing the negative
                     # performance function maximizes it.
                     pos_actor_loss: torch.Tensor = -(torch.min(pos_surr1, pos_surr2) + self.config.entropy_weight * pos_dist_entropy).mean()
-                    sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + self.config.entropy_weight * sym_dist_entropy).mean()
+                    sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + 0* self.config.entropy_weight * sym_dist_entropy).mean()
                     critic_loss: torch.Tensor = F.mse_loss(V, batch_rtgs)
                     loss: torch.Tensor = self.config.actor_weight * (pos_actor_loss+sym_actor_loss)/2 + self.config.critic_weight * critic_loss
                     assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"

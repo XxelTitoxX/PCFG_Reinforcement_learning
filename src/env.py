@@ -199,7 +199,7 @@ class Environment:
         return reward
     
     def success(self) -> torch.Tensor:
-        return self.done & self.state[:, self.step_count, 0] == 0
+        return self.done & (self.state[:, self.step_count, 0] == 0)
 
     
     def collect_data_batch(self, gamma: float):

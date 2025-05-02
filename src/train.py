@@ -20,7 +20,7 @@ def train(name: str, persistent_dir: Path, args: argparse.Namespace, ppo_config:
     logger.info(f"Training name: {name}, persistent_dir: {persistent_dir} with args: {args}")
 
     train_corpus: Corpus = Corpus(
-        str(args.directory / "ptb-train.txt"), max_vocab_size=args.max_vocab_size, max_len=args.max_len
+        str(args.directory / "ptb-train.txt"), max_vocab_size=args.max_vocab_size, max_len=args.max_len, max_sentence_length=60
     )
     valid_corpus: Corpus = Corpus(str(args.directory / "ptb-valid.txt"))
     # train and valid corpus must use the same symbol_to_idx and idx_to_symbol for the correct results

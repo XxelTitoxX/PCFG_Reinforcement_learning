@@ -4,9 +4,27 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
-from sequence_embedding import EnhancedTransformerEmbedding
+from sequence_embedding import EnhancedTransformerEmbedding, TransformerEmbedding
 
 logger = getLogger(__name__)
+
+def retrieve_rule_mask(rule_mask: torch.Tensor, symbol_pair: torch.Tensor) -> torch.Tensor:
+    """
+    Given a rule mask and a symbol pair, retrieves the corresponding rule mask for the symbol pair.
+
+    Args:
+        rule_mask (torch.Tensor): Tensor of shape (action_dim, state_dim, state_dim)
+        symbol_pair (torch.Tensor): Tensor of shape (batch_size, 2) containing symbol pairs
+
+    Returns:
+        torch.Tensor: Tensor of shape (batch_size, action_dim) with the corresponding rule mask values.
+    """
+    batch_size = symbol_pair.shape[0]
+    action_dim = rule_mask.shape[0]
+    rows = torch.arange(action_dim).unsqueeze(0).repeat(batch_size, 1)
+    cols = symbol_pair.unsqueeze(1).repeat(1, action_dim, 1)
+    rule_weights = rule_mask[rows, cols[:, :, 0], cols[:, :, 1]]  # (batch_size, action_dim)
+    return rule_weights
 
 def get_adjacent_pairs(sentences: torch.Tensor, sequence_lengths: torch.Tensor) -> torch.Tensor:
     """
@@ -75,7 +93,7 @@ class ActorCritic(nn.Module):
         assert self.n_layer > 0, f"n_layer must be greater than 0, got {self.n_layer}"
         assert self.embedding_dim > 0, f"embedding_dim must be greater than 0, got {self.embedding_dim}"
 
-        self.state_encoder: EnhancedTransformerEmbedding = EnhancedTransformerEmbedding(state_dim=state_dim, embedding_dim=embedding_dim,
+        self.state_encoder: EnhancedTransformerEmbedding = TransformerEmbedding(state_dim=state_dim, embedding_dim=embedding_dim,
                                                             num_layers=n_layer,
                                                             max_seq_len=60, num_heads=num_heads, dropout=0.0
                                                           )
@@ -99,6 +117,8 @@ class ActorCritic(nn.Module):
             nn.ReLU(),
             nn.Linear(embedding_dim, 1),
         )
+
+        #self.rule_mask : torch.Tensor = torch.zeros((action_dim, state_dim, state_dim), dtype=torch.float32)
 
         logger.info(
             f"ActorCritic initialized with {sum(p.numel() for p in self.parameters()):,} parameters, "
@@ -165,10 +185,13 @@ class ActorCritic(nn.Module):
         position_action_logprob: torch.Tensor = dist.log_prob(position_action)
 
         # Get according symbol pair
-        symbol_pair: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
+        #symbol_pair : torch.Tensor = torch.tensor([states[torch.arange(batch_size), position_action], states[torch.arange(batch_size), position_action + 1]]).T # (batch_size, 2)
+        #symbol_mask : torch.Tensor = retrieve_rule_mask(self.rule_mask, symbol_pair) # (batch_size, action_dim)
+        symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
 
         # Calculate symbol scores for each pair
-        symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair) # (batch_size, action_dim)
+        symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair_emb) # (batch_size, action_dim)
+        #symbol_scores = symbol_scores + symbol_mask
         symbol_probs: torch.Tensor = torch.softmax(symbol_scores, dim=1) # (batch_size, action_dim)
 
         # Sample symbol action
