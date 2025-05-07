@@ -24,6 +24,7 @@ logger = getLogger(__name__)
 # OpenMP uses all the cpu cores by default, leading to inefficiency.
 torch.set_num_threads(1)
 
+PURE_REINFORCE = True
 
 def mean(x: list[Any]) -> float:
     return sum(x) / len(x)
@@ -118,6 +119,8 @@ class PPOConfig:
     n_layer: int = 1
     n_head: int = 2
     embedding_dim: int = 64
+
+    gradient_clip : Optional[float] = None
 
 
 class PPO:
@@ -268,56 +271,68 @@ class PPO:
 
                 # Calculate advantage at k-th iteration
                 with torch.no_grad():
-                    V = self.actor_critic.state_val(batch_obs)
-                    A_k: torch.Tensor = batch_rtgs - V.detach()  # ALG STEP 5
+                    if PURE_REINFORCE:
+                        A_k: torch.Tensor = batch_rtgs
+                    else:
+                        V = self.actor_critic.state_val(batch_obs)
+                        A_k: torch.Tensor = batch_rtgs - V.detach()  # ALG STEP 5
 
                 # One of the few tricks I use that isn't in the pseudocode. Normalizing advantages
                 # isn't theoretically necessary, but in practice it decreases the variance of
                 # our advantages and makes convergence much more stable and faster. I added this because
                 # solving some environments was too unstable without it.
-                    A_k: torch.Tensor = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
+                    #A_k: torch.Tensor = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
                     P_A_k: torch.Tensor = A_k[mask_position]
                     S_A_k: torch.Tensor = A_k[mask_symbol]
                     self.logger['advantages'] = A_k
 
+                n_updates_per_iteration = 1 if PURE_REINFORCE else self.config.n_updates_per_iteration
                 # This is the loop where we update our network for some n epochs
-                for _ in range(self.config.n_updates_per_iteration):  # ALG STEP 6 & 7
+                for _ in range(n_updates_per_iteration):  # ALG STEP 6 & 7
                     # Calculate V_phi and pi_theta(a_t | s_t)
                     curr_pos_log_probs, pos_dist_entropy, curr_sym_log_probs, sym_dist_entropy, _ = self.actor_critic.evaluate(batch_obs[mask_position], positions, symbols)
-                    V = self.actor_critic.state_val(batch_obs)
+                    if PURE_REINFORCE:
+                        pos_actor_loss = -(curr_pos_log_probs * P_A_k + self.config.entropy_weight*pos_dist_entropy).mean()
+                        sym_actor_loss = -(curr_sym_log_probs * S_A_k + self.config.entropy_weight*sym_dist_entropy).mean()
+                        critic_loss = torch.tensor([0.0])
+                        loss = pos_actor_loss + sym_actor_loss
 
-                    # Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
-                    # NOTE: we just subtract the logs, which is the same as
-                    # dividing the values and then canceling the log with e^log.
-                    # For why, we use log probabilities instead of actual probabilities,
-                    # here's a great explanation:
-                    # https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
-                    # TL;DR makes gradient ascent easier behind the scenes.
-                    pos_ratios: torch.Tensor = torch.exp(curr_pos_log_probs - positions_log_probs)
-                    sym_ratios: torch.Tensor = torch.exp(curr_sym_log_probs - symbols_log_probs)
+                    else:
+                        V = self.actor_critic.state_val(batch_obs)
 
-                    # Calculate surrogate losses.
-                    pos_surr1: torch.Tensor = pos_ratios * P_A_k
-                    pos_surr2: torch.Tensor = torch.clamp(pos_ratios, 1 - self.config.clip, 1 + self.config.clip) * P_A_k
-                    sym_surr1: torch.Tensor = sym_ratios * S_A_k
-                    sym_surr2: torch.Tensor = torch.clamp(sym_ratios, 1 - self.config.clip, 1 + self.config.clip) * S_A_k
+                        # Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
+                        # NOTE: we just subtract the logs, which is the same as
+                        # dividing the values and then canceling the log with e^log.
+                        # For why, we use log probabilities instead of actual probabilities,
+                        # here's a great explanation:
+                        # https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
+                        # TL;DR makes gradient ascent easier behind the scenes.
+                        pos_ratios: torch.Tensor = torch.exp(curr_pos_log_probs - positions_log_probs)
+                        sym_ratios: torch.Tensor = torch.exp(curr_sym_log_probs - symbols_log_probs)
 
-                    # Calculate actor and critic losses.
-                    # NOTE: we take the negative min of the surrogate losses because we're trying to maximize
-                    # the performance function, but Adam minimizes the loss. So minimizing the negative
-                    # performance function maximizes it.
-                    pos_actor_loss: torch.Tensor = -(torch.min(pos_surr1, pos_surr2) + self.config.entropy_weight * pos_dist_entropy).mean()
-                    sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + 0* self.config.entropy_weight * sym_dist_entropy).mean()
-                    critic_loss: torch.Tensor = F.mse_loss(V, batch_rtgs)
-                    loss: torch.Tensor = self.config.actor_weight * (pos_actor_loss+sym_actor_loss)/2 + self.config.critic_weight * critic_loss
-                    assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"
+                        # Calculate surrogate losses.
+                        pos_surr1: torch.Tensor = pos_ratios * P_A_k
+                        pos_surr2: torch.Tensor = torch.clamp(pos_ratios, 1 - self.config.clip, 1 + self.config.clip) * P_A_k
+                        sym_surr1: torch.Tensor = sym_ratios * S_A_k
+                        sym_surr2: torch.Tensor = torch.clamp(sym_ratios, 1 - self.config.clip, 1 + self.config.clip) * S_A_k
+
+                        # Calculate actor and critic losses.
+                        # NOTE: we take the negative min of the surrogate losses because we're trying to maximize
+                        # the performance function, but Adam minimizes the loss. So minimizing the negative
+                        # performance function maximizes it.
+                        pos_actor_loss: torch.Tensor = -(torch.min(pos_surr1, pos_surr2) + self.config.entropy_weight * pos_dist_entropy).mean()
+                        sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + 0* self.config.entropy_weight * sym_dist_entropy).mean()
+                        critic_loss: torch.Tensor = F.mse_loss(V, batch_rtgs)
+                        loss: torch.Tensor = self.config.actor_weight * (pos_actor_loss+sym_actor_loss)/2 + self.config.critic_weight * critic_loss
+                        assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"
 
                     # Calculate gradients and perform backward propagation for actor_critic network
                     self.optim.zero_grad()
                     loss.backward()
                     # Clip gradients to prevent exploding gradients
-                    torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), 0.5)
+                    if self.config.gradient_clip is not None:
+                        torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.config.gradient_clip)
                     self.optim.step()
 
                     # Log actor and critic loss
@@ -384,6 +399,12 @@ class PPO:
             f"avg position entropy: {avg_pos_entropy:.5f}, "
             f"avg symbol entropy: {avg_sym_entropy:.5f}"
         )
+        '''
+        logger.info(
+            f"pos actor loss: {self.logger['pos_actor_losses']}, "
+            f"sym actor loss: {self.logger['sym_actor_losses']}, "
+        )
+        '''
         self.writer.log(
             {
                 'delta_t': delta_t,

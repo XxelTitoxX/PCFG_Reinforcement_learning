@@ -67,6 +67,7 @@ if __name__ == '__main__':
     parser.add_argument("--embedding_dim", type=int)
     parser.add_argument("--n_layer", type=int)
     parser.add_argument("--n_head", type=int)
+    parser.add_argument("--gradient_clip", type=float)
 
     args: argparse.Namespace = parser.parse_args()
 
