@@ -27,7 +27,7 @@ class ProbabilityCriterion(Criterion):
         log_probs[mask] = 0.
 
         not_parsed_probs = torch.zeros(batch_size, device=env.device)
-        not_parsed_probs[~env.success()] = float('-inf')
+        not_parsed_probs[~env.done] = float('-inf')
         sentence_parsing_log_probs = torch.sum(log_probs, dim=1) + not_parsed_probs
         parsing_probs = torch.exp(sentence_parsing_log_probs)
         self.update_score(parsing_probs)

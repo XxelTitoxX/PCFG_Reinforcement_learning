@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def datetime_tag() -> str:
-    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.datetime.now().strftime("%m%d_%H:%M:%S")
 
 
 def train(name: str, persistent_dir: Path, args: argparse.Namespace, ppo_config: PPOConfig) -> None:
@@ -68,6 +68,7 @@ if __name__ == '__main__':
     parser.add_argument("--n_layer", type=int)
     parser.add_argument("--n_head", type=int)
     parser.add_argument("--gradient_clip", type=float)
+    parser.add_argument("--pure_reinforce", action='store_true')
 
     args: argparse.Namespace = parser.parse_args()
 
@@ -77,7 +78,7 @@ if __name__ == '__main__':
     }
     ppo_config: PPOConfig = PPOConfig(**hyperparameters)
 
-    name: str = f"{ppo_config.num_non_terminals}_{ppo_config.num_sentences_per_batch}_{datetime_tag()}"
+    name: str = f"{ppo_config.num_non_terminals}_{ppo_config.num_sentences_per_batch}_{datetime_tag()}_{'REINFORCE' if ppo_config.pure_reinforce else 'PPO'}"
     persistent_dir: Path = Path("log") / name
     persistent_dir.mkdir(parents=True, exist_ok=False)
 

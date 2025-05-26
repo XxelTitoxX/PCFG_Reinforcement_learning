@@ -58,12 +58,13 @@ class ResultSaver:
         self.valid_env: Environment = Environment(num_sentences_per_score, max_num_steps, 0.0, device)
 
     def save(
-            self, name: str, i_so_far: int, actor_critic: ActorCritic,
+            self, name: str, i_so_far: int, actor_critic: ActorCritic, pos_tags_to_sym,
             commit: bool
     ):
         with torch.no_grad():
             try:
                 train_sentences, train_spans = next(self.train_iterator)
+
                 if train_sentences.shape[0] != self.num_sentences_per_score:
                     raise StopIteration
             except StopIteration:
@@ -76,8 +77,8 @@ class ResultSaver:
             except StopIteration:
                 self.valid_iterator = iter(self.valid_dataloader)
                 valid_sentences, valid_spans = next(self.valid_iterator)
-            self.train_env.rollout(actor_critic, train_sentences, train_spans, evaluate=True)
-            self.valid_env.rollout(actor_critic, valid_sentences, valid_spans, evaluate=True)
+            self.train_env.rollout(actor_critic, pos_tags_to_sym(train_sentences), train_spans, evaluate=True)
+            self.valid_env.rollout(actor_critic, pos_tags_to_sym(valid_sentences), valid_spans, evaluate=True)
             train_f1: float = torch.mean(self.train_f1_criterion.score_sentences(self.train_env)).item()
             valid_f1: float = torch.mean(self.valid_f1_criterion.score_sentences(self.valid_env)).item()
 

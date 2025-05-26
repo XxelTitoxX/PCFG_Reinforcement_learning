@@ -11,6 +11,7 @@ __all__ = ['GoldSpan', 'Sentence']
 
 logger = getLogger(__name__)
 
+
 POS_CLUSTER: dict[str, str] = {
             "CC": "CC",
 
@@ -161,7 +162,7 @@ class Sentence:
 
     Spans from tree_sr are used to calculate the oracle f1 score (the highest f1 score achievable).
     """
-    tree_sr_spans: list[tuple[int, int]] = field(init=False)
+    tree_sr_spans: list[GoldSpan] = field(init=False)
     """
     List of spans in tree_sr.
     e.g., [(0, 2), (1, 2)]
@@ -169,7 +170,6 @@ class Sentence:
     This is used to calculate the oracle f1 score.
     """
     pos_tags: list[int] = field(init=False)
-    start_end_spans: list[tuple[int, int]] = field(init=False)
 
 
     def __post_init__(self):
@@ -186,7 +186,6 @@ class Sentence:
                     self.actions_sanitized.append(action)
 
         self._initialize_gold_and_sr()
-        self._initialize_start_end_spans()
 
         self.__pos_tags()
 
@@ -233,10 +232,10 @@ class Sentence:
                     assert len(stack) > 0 and isinstance(stack[-1], tuple), f"Stack: {stack}"
                     span: tuple[int, int] = stack.pop()
 
-                    n_new_shifts: int = 0
+                    intermediate_left: list[int] = []
                     while isinstance(stack[-1], tuple):
-                        n_new_shifts += 1
                         span = (stack.pop()[0], span[1])
+                        intermediate_left.append(span[0])
 
                     assert len(stack) > 0 and isinstance(stack[-1], NT), f"Stack: {stack}"
                     nt: NT = stack.pop()
@@ -258,12 +257,9 @@ class Sentence:
                     if span[0] != span[1]:
                         self.gold_spans.append(GoldSpan(nt.tag, span[0], span[1]))
 
-                    left: int = span[0]
-                    while n_new_shifts > 0:
+                    for left in intermediate_left:
+                        self.tree_sr_spans.append(GoldSpan(nt.tag, left, span[1]))
                         self.tree_sr.append('R')
-                        self.tree_sr_spans.append((left, span[1]))
-                        n_new_shifts -= 1
-                        left += 1
 
         assert len(stack) == 1 and isinstance(stack[0], tuple), f"Stack: {stack}"
         assert pointer == len(self.symbols), f"Pointer: {pointer}, Symbols: {self.symbols}"
@@ -271,11 +267,6 @@ class Sentence:
         self.gold_spans_all.sort()
         self.gold_spans.sort()
         self.tree_sr_spans.sort()
-
-    def _initialize_start_end_spans(self) -> None:
-        self.start_end_spans: list[tuple[int, int]] = []
-        for span in self.gold_spans:
-            self.start_end_spans.append(span.start_end())
 
     def tree(self) -> str:
         """

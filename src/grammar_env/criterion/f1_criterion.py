@@ -35,7 +35,7 @@ class F1Criterion(Criterion):
             self, env : Environment
     ) -> torch.Tensor:
         pred_spans: list[list[tuple[int, int]]] = env.spans_lists
-        gold_spans: list[set[tuple[int, int]]] = env.gt_spans
+        gold_spans: list[set[tuple[int, int]]] = [set(sspans.keys()) for sspans in env.gt_spans]
 
         f1_scores: list[float] = []
         for gt_spans, s_pred_spans, s_len in zip(gold_spans, pred_spans, env.sentence_lengths):

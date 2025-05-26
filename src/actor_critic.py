@@ -21,7 +21,7 @@ def retrieve_rule_mask(rule_mask: torch.Tensor, symbol_pair: torch.Tensor) -> to
     """
     batch_size = symbol_pair.shape[0]
     action_dim = rule_mask.shape[0]
-    rows = torch.arange(action_dim).unsqueeze(0).repeat(batch_size, 1)
+    rows = torch.arange(action_dim, device=rule_mask.device).unsqueeze(0).repeat(batch_size, 1)
     cols = symbol_pair.unsqueeze(1).repeat(1, action_dim, 1)
     rule_weights = rule_mask[rows, cols[:, :, 0], cols[:, :, 1]]  # (batch_size, action_dim)
     return rule_weights
@@ -82,7 +82,7 @@ def map_scores_to_sentences(embedding_pairs_scores: torch.Tensor, sequence_lengt
 
 class ActorCritic(nn.Module):
     def __init__(
-            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int
+            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int, rule_mask_on: bool = False
     ):
         super().__init__()
 
@@ -118,7 +118,9 @@ class ActorCritic(nn.Module):
             nn.Linear(embedding_dim, 1),
         )
 
-        #self.rule_mask : torch.Tensor = torch.zeros((action_dim, state_dim, state_dim), dtype=torch.float32)
+        self.r_mask_on: bool = rule_mask_on
+        if self.r_mask_on:
+            self.rule_mask : nn.Parameter = nn.Parameter(torch.zeros((action_dim, state_dim, state_dim), dtype=torch.float32))
 
         logger.info(
             f"ActorCritic initialized with {sum(p.numel() for p in self.parameters()):,} parameters, "
@@ -141,7 +143,7 @@ class ActorCritic(nn.Module):
         cls_token, sequence_embedding = self.state_encoder(state)
         return cls_token, sequence_embedding
 
-    def act(self, states: torch.Tensor, max_prob=False) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def act(self, states: torch.Tensor, max_prob:bool=False, gt_positions:torch.Tensor=None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Given a batch of states, sample an action for each state, calculate the action log probability, and new state value.
         :param state: np.ndarray of shape (batch_size, seq_max_len) where each value is a symbol index (-1 is padding value, shifted by 1 when given to state_encoder)
@@ -179,20 +181,36 @@ class ActorCritic(nn.Module):
         # Sample position in the sequence with according log probability
         dist: Categorical = Categorical(action_probs)
         if max_prob:
-            position_action: torch.Tensor = torch.argmax(action_probs, dim=1)
+            position_action: torch.Tensor = torch.argmax(action_probs, dim=1) # (batch_size,)
         else:
-            position_action: torch.Tensor = dist.sample()
+            position_action: torch.Tensor = dist.sample().long() # (batch_size,)
         position_action_logprob: torch.Tensor = dist.log_prob(position_action)
 
         # Get according symbol pair
-        #symbol_pair : torch.Tensor = torch.tensor([states[torch.arange(batch_size), position_action], states[torch.arange(batch_size), position_action + 1]]).T # (batch_size, 2)
-        #symbol_mask : torch.Tensor = retrieve_rule_mask(self.rule_mask, symbol_pair) # (batch_size, action_dim)
-        symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
+        if self.r_mask_on:
+            # Get the indices for both positions
+            idx1 = torch.arange(batch_size, device=states.device)
+            pos1 = position_action
+            pos2 = position_action + 1
+
+            # Create symbol pairs
+            first_symbols = states[idx1, pos1]
+            second_symbols = states[idx1, pos2]
+            symbol_pair = torch.stack([first_symbols, second_symbols], dim=1)  # (batch_size, 2)
+            # symbol_pair : torch.Tensor = torch.tensor([states[torch.arange(batch_size, device=states.device), position_action], states[torch.arange(batch_size, device=states.device), position_action + 1]]).T # (batch_size, 2)
+            symbol_mask : torch.Tensor = retrieve_rule_mask(self.rule_mask, symbol_pair) # (batch_size, action_dim)
+        else:
+            symbol_mask = torch.zeros((batch_size, self.action_dim), device=states.device)
+        if gt_positions is not None:
+            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), gt_positions], sequence_embedding[torch.arange(batch_size), gt_positions + 1]), dim=1) # (batch_size, embedding_dim*2)
+        else:
+            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
 
         # Calculate symbol scores for each pair
         symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair_emb) # (batch_size, action_dim)
-        #symbol_scores = symbol_scores + symbol_mask
-        symbol_probs: torch.Tensor = torch.softmax(symbol_scores, dim=1) # (batch_size, action_dim)
+        symbol_scores = symbol_scores + symbol_mask
+        arbitrary_temperature = 1.0
+        symbol_probs: torch.Tensor = torch.softmax(symbol_scores/arbitrary_temperature, dim=1) # (batch_size, action_dim)
 
         # Sample symbol action
         dist: Categorical = Categorical(symbol_probs)
@@ -265,10 +283,25 @@ class ActorCritic(nn.Module):
         position_entropy: torch.Tensor = dist.entropy() # (batch_size,)
 
         # Get according symbol pair
-        symbol_pair: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
+        if self.r_mask_on:
+            # Get the indices for both positions
+            idx1 = torch.arange(batch_size, device=states.device)
+            pos1 = position_action
+            pos2 = position_action + 1
+
+            # Create symbol pairs
+            first_symbols = states[idx1, pos1]
+            second_symbols = states[idx1, pos2]
+            symbol_pair = torch.stack([first_symbols, second_symbols], dim=1)  # (batch_size, 2)
+            # symbol_pair : torch.Tensor = torch.tensor([states[torch.arange(batch_size, device=states.device), position_action], states[torch.arange(batch_size, device=states.device), position_action + 1]]).T # (batch_size, 2)
+            symbol_mask : torch.Tensor = retrieve_rule_mask(self.rule_mask, symbol_pair) # (batch_size, action_dim)
+        else:
+            symbol_mask = torch.zeros((batch_size, self.action_dim), device=states.device)
+        symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
 
         # Calculate symbol scores for each pair
-        symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair) # (batch_size, action_dim)
+        symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair_emb) # (batch_size, action_dim)
+        symbol_scores = symbol_scores + symbol_mask
         symbol_probs: torch.Tensor = torch.softmax(symbol_scores, dim=1) # (batch_size, action_dim)
 
         # Sample symbol action

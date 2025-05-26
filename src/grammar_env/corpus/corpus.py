@@ -6,6 +6,7 @@ from typing import Optional
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import torch
+import re
 
 from dataclasses_json import dataclass_json
 
@@ -15,12 +16,30 @@ __all__ = ['Corpus']
 
 logger = getLogger(__name__)
 
+NON_TERMINAL_TAGS = ['X', 'ADJP', 'ADVP', 'CONJP', 'FRAG', 'INTJ', 'LST', 'NAC', 'NP', 'NX', 'PP', 'PRN', 'PRT', 'QP', 'RRC', 'S', 'SBAR', 'SBARQ', 'SINV', 'SQ', 'UCP', 'VP', 'WHADJP', 'WHADVP', 'WHNP', 'WHPP']
+NT_TAG_TO_IDX = {
+    'X': 0, 'ADJP': 1, 'ADVP': 2, 'CONJP': 3, 'FRAG': 4, 'INTJ': 5, 'LST': 6, 'NAC': 7, 'NP': 8,
+    'NX': 9, 'PP': 10, 'PRN': 11, 'PRT': 12, 'QP': 13, 'RRC': 14, 'S': 15, 'SBAR': 16, 'SBARQ': 17,
+    'SINV': 18, 'SQ': 19, 'UCP': 20, 'VP': 21, 'WHADJP': 22, 'WHADVP': 23, 'WHNP': 24, 'WHPP': 25
+}
+
+def remove_after_dash(s:str) -> str:
+    """
+    Removes everything after the first '-' or '=' or '|' character in a string, including the character itself.
+    
+    Parameters:
+        s (str): The input string.
+    
+    Returns:
+        str: The truncated string.
+    """
+    return re.split('[-=|]', s, 1)[0]
 
 class SentenceDataset(Dataset):
     def __init__(self, sentences: list[Sentence]):
         self.raw_sentences : list[Sentence] = sentences
         self.pos_tags : list[list[int]] = [sentence.pos_tags for sentence in sentences]
-        self.gold_spans : list[list[tuple[int, int]]] = [sentence.start_end_spans for sentence in sentences]
+        self.gold_spans : list[dict[tuple[int, int], int]] = [{s.start_end() : NT_TAG_TO_IDX[remove_after_dash(s.tag)] for s in sentence.tree_sr_spans} for sentence in sentences]
     def __len__(self):
         return len(self.raw_sentences)
 
@@ -56,10 +75,16 @@ class Corpus:
     symbol_count: list[tuple[str, int]] = field(init=False)
     symbol_to_idx: dict[str, int] = field(init=False)
     idx_to_symbol: dict[int, str] = field(init=False)
+    symbol_freq: dict[str, float] = field(init=False)
+    pt_freq: dict[str, float] = field(init=False)
 
     def __post_init__(self):
         self._initialize_sentences()
         self._initialize_symbol_idx()
+        self._initialize_NT_histogram()
+        self._initialize_PT_histogram()
+        print(f"NT histogram: {self.symbol_freq}")
+        print(f"PT histogram: {self.pt_freq}")
         logger.info(
             f"Read corpus of length {len(self)} from {self.ptb_path}, "
             f"min_sentence_length={self.min_sentence_length}, "
@@ -116,6 +141,30 @@ class Corpus:
         for idx, (symbol, _) in enumerate(symbol_count, 3):
             self.symbol_to_idx[symbol] = idx
             self.idx_to_symbol[idx] = symbol
+
+    def _initialize_NT_histogram(self) -> None:
+        """
+        Print the histogram of non-terminal symbols in the corpus.
+        """
+        nt_count: defaultdict[str, int] = defaultdict(int)
+        for sentence in self.sentences:
+            for span in sentence.tree_sr_spans:
+                nt_count[remove_after_dash(span.tag)] += 1
+        overall_count = sum(nt_count.values())
+        normalized_count = {k: v / overall_count for k, v in nt_count.items()}
+        self.symbol_freq = normalized_count
+
+    def _initialize_PT_histogram(self) -> None:
+        """
+        Print the histogram of part-of-speech tags in the corpus.
+        """
+        pt_count: defaultdict[str, int] = defaultdict(int)
+        for sentence in self.sentences:
+            for pos_tag in sentence.pos_tags:
+                pt_count[pos_tag] += 1
+        overall_count = sum(pt_count.values())
+        normalized_count = {k: v / overall_count for k, v in pt_count.items()}
+        self.pt_freq = normalized_count
 
     def __len__(self):
         return len(self.sentences)

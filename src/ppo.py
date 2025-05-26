@@ -10,10 +10,11 @@ import torch
 import torch.nn.functional as F
 from dataclasses_json import dataclass_json
 from torch.optim import Adam
+from torch.distributions import Categorical
 
 from actor_critic import ActorCritic
 from grammar_env.corpus.corpus import Corpus
-from env import Environment
+from env import Environment, test_fuse_and_shift
 from result_saver import ResultSaver
 from writer import Writer
 
@@ -24,7 +25,6 @@ logger = getLogger(__name__)
 # OpenMP uses all the cpu cores by default, leading to inefficiency.
 torch.set_num_threads(1)
 
-PURE_REINFORCE = True
 
 def mean(x: list[Any]) -> float:
     return sum(x) / len(x)
@@ -116,11 +116,12 @@ class PPOConfig:
     min_ep_rews_threshold: float = 0.  # Minimum episodic rewards threshold to log the grammar
 
     # Network parameters
-    n_layer: int = 1
+    n_layer: int = 2
     n_head: int = 2
-    embedding_dim: int = 64
+    embedding_dim: int = 32
 
     gradient_clip : Optional[float] = None
+    pure_reinforce : bool = False
 
 
 class PPO:
@@ -140,6 +141,7 @@ class PPO:
         torch.manual_seed(config.seed)
 
         self.train_dataloader = train_corpus.get_dataloader(config.num_sentences_per_batch)
+        self.train_iterator = iter(self.train_dataloader)
         self.valid_dataloader = valid_corpus.get_dataloader(config.num_sentences_per_score)
 
         self.result_saver: ResultSaver = ResultSaver(
@@ -149,28 +151,11 @@ class PPO:
         )
 
         # Setup environment
-        """
-        match config.criterion:
-            case "prob":
-                self._criterion: Criterion = ProbabilityCriterion(
-                    self.train_corpus, self.device
-                )
-            case "cov":
-                self._criterion: Criterion = CoverageCriterion(
-                    self.train_corpus, self.device
-                )
-            case "f1":
-                self._criterion: Criterion = F1Criterion(
-                    self.train_corpus, self.device
-                )
-            case _:
-                raise ValueError(f"Invalid criterion: {config.criterion}")
-        """
-        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, 1.0, device)
+        self.env: Environment = Environment(config.num_sentences_per_batch, config.max_num_steps, 0.0, device, supervised=True, symbol_freq=None)
 
         # Initialize actor and critic networks
         self.actor_critic = ActorCritic(  # ALG STEP 1
-            self.state_dim, config.embedding_dim, config.num_non_terminals, config.n_layer, config.n_head
+            self.state_dim, config.embedding_dim, config.num_non_terminals, config.n_layer, config.n_head, rule_mask_on=False,
         )
         self.actor_critic.to(device)
 
@@ -199,6 +184,8 @@ class PPO:
             'critic_losses': [],  # losses of critic network in current iteration
             'pos_entropy': [],  # entropy of actor network in current iteration
             'sym_entropy': [],  # entropy of actor network in current iteration
+            'positions_histogram' : [],
+            'symbols_histogram' : [],
         }
 
     def pos_tags_to_symbols(self, pos_tags: torch.Tensor) -> torch.Tensor:
@@ -233,21 +220,30 @@ class PPO:
         t_so_far: int = 0  # Timesteps simulated so far
         i_so_far: int = 0  # Iterations ran so far
 
-        for epoch in range(self.config.num_epochs):
-            for batch_t_stc, batch_t_spans in self.train_dataloader:  # ALG STEP 2
-                if t_so_far >= total_timesteps:
-                    break
+        epoch: int = 0
+        while epoch < self.config.num_epochs and t_so_far < total_timesteps:
+            for batch_t_stc, batch_t_spans in self.train_dataloader:  
+                # ALG STEP 2, batch selection
+                try:
+                    batch_t_stc, batch_t_spans = next(self.train_iterator)
+                    if batch_t_stc.shape[0] != self.config.num_sentences_per_batch:
+                        raise StopIteration
+                except StopIteration:
+                    logger.info(f"EPOCH {epoch} finished, t_so_far: {t_so_far}, i_so_far: {i_so_far}")
+                    epoch += 1
+                    self.train_iterator = iter(self.train_dataloader)
+                    batch_t_stc, batch_t_spans = next(self.train_iterator)
                 # ALG STEP 3, batch simulation
-                # TODO
-                #self.actor_critic.to(torch.device('cpu'))
                 self.actor_critic.eval()
                 with torch.no_grad():
                     
                     self.env.rollout(
                         self.actor_critic, self.pos_tags_to_symbols(batch_t_stc), batch_t_spans)
-                    batch_obs, batch_rtgs, positions, positions_log_probs, symbols, symbols_log_probs, mask_position, mask_symbol, ep_rtgs = self.env.collect_data_batch(self.config.gamma)
+                    batch_obs, batch_rtgs, positions, positions_log_probs, symbols, symbols_log_probs, sym_rtgs, ep_rtgs = self.env.collect_data_batch(self.config.gamma) # mask_position, mask_symbol
                     # NOTE: batch_obs and batch_rtgs contain one extra timestep at the end
                     batch_lens: torch.Tensor = self.env.ep_len
+                    print(f"Position rewards : {self.env.rew.float().mean(dim=0)}")
+                    print(f"Symbol rewards : {self.env.sym_rew.float().mean(dim=0)}")
                 device = self.device
                 self.actor_critic.to(device)
                 self.actor_critic.train()
@@ -266,13 +262,14 @@ class PPO:
                 positions_histogram = one_hot_positions.sum(dim=0)
                 one_hot_symbols = F.one_hot(symbols.long(), num_classes=self.config.num_non_terminals).float()
                 symbols_histogram = one_hot_symbols.sum(dim=0)
-                logger.info(f"positions histogram: {positions_histogram}")
-                logger.info(f"symbols histogram: {symbols_histogram}")
+                self.logger['positions_histogram'] = positions_histogram
+                self.logger['symbols_histogram'] = symbols_histogram
 
                 # Calculate advantage at k-th iteration
                 with torch.no_grad():
-                    if PURE_REINFORCE:
-                        A_k: torch.Tensor = batch_rtgs
+                    if self.config.pure_reinforce:
+                        P_A_k: torch.Tensor = (batch_rtgs - batch_rtgs.mean()) / (batch_rtgs.std() + 1e-10)
+                        S_A_k: torch.Tensor = (sym_rtgs - sym_rtgs.mean()) / (sym_rtgs.std() + 1e-10)
                     else:
                         V = self.actor_critic.state_val(batch_obs)
                         A_k: torch.Tensor = batch_rtgs - V.detach()  # ALG STEP 5
@@ -283,18 +280,18 @@ class PPO:
                 # solving some environments was too unstable without it.
                     #A_k: torch.Tensor = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
-                    P_A_k: torch.Tensor = A_k[mask_position]
-                    S_A_k: torch.Tensor = A_k[mask_symbol]
-                    self.logger['advantages'] = A_k
+                    #P_A_k: torch.Tensor = A_k[mask_position]
+                    #S_A_k: torch.Tensor = A_k[mask_symbol]
+                    self.logger['advantages'] = P_A_k
 
-                n_updates_per_iteration = 1 if PURE_REINFORCE else self.config.n_updates_per_iteration
+                n_updates_per_iteration = 1 if self.config.pure_reinforce else self.config.n_updates_per_iteration
                 # This is the loop where we update our network for some n epochs
                 for _ in range(n_updates_per_iteration):  # ALG STEP 6 & 7
                     # Calculate V_phi and pi_theta(a_t | s_t)
-                    curr_pos_log_probs, pos_dist_entropy, curr_sym_log_probs, sym_dist_entropy, _ = self.actor_critic.evaluate(batch_obs[mask_position], positions, symbols)
-                    if PURE_REINFORCE:
+                    curr_pos_log_probs, pos_dist_entropy, curr_sym_log_probs, sym_dist_entropy, _ = self.actor_critic.evaluate(batch_obs, positions, symbols) # [mask_position]
+                    if self.config.pure_reinforce:
                         pos_actor_loss = -(curr_pos_log_probs * P_A_k + self.config.entropy_weight*pos_dist_entropy).mean()
-                        sym_actor_loss = -(curr_sym_log_probs * S_A_k + self.config.entropy_weight*sym_dist_entropy).mean()
+                        sym_actor_loss = -(curr_sym_log_probs * S_A_k + 5*self.config.entropy_weight*sym_dist_entropy).mean()
                         critic_loss = torch.tensor([0.0])
                         loss = pos_actor_loss + sym_actor_loss
 
@@ -322,11 +319,17 @@ class PPO:
                         # the performance function, but Adam minimizes the loss. So minimizing the negative
                         # performance function maximizes it.
                         pos_actor_loss: torch.Tensor = -(torch.min(pos_surr1, pos_surr2) + self.config.entropy_weight * pos_dist_entropy).mean()
-                        sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + 0* self.config.entropy_weight * sym_dist_entropy).mean()
+                        sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + self.config.entropy_weight * sym_dist_entropy).mean()
                         critic_loss: torch.Tensor = F.mse_loss(V, batch_rtgs)
                         loss: torch.Tensor = self.config.actor_weight * (pos_actor_loss+sym_actor_loss)/2 + self.config.critic_weight * critic_loss
                         assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"
 
+                    if self.actor_critic.r_mask_on:
+                        all_abs_symb_dist = Categorical(torch.softmax(self.actor_critic.rule_mask.view(self.config.num_non_terminals, -1), dim=1))
+                        all_abs_symb_dist_entropy = all_abs_symb_dist.entropy()
+                        abs_symb_ent_weight = 0.2
+                        abs_symb_entropy_loss = abs_symb_ent_weight*all_abs_symb_dist_entropy.mean()
+                        loss += abs_symb_entropy_loss
                     # Calculate gradients and perform backward propagation for actor_critic network
                     self.optim.zero_grad()
                     loss.backward()
@@ -334,6 +337,11 @@ class PPO:
                     if self.config.gradient_clip is not None:
                         torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.config.gradient_clip)
                     self.optim.step()
+
+                    if self.actor_critic.r_mask_on:
+                        max_log_prob = torch.amax(self.actor_critic.rule_mask, dim=(1,2))
+                        self.actor_critic.rule_mask.data -= max_log_prob[:, None, None]
+                        pass
 
                     # Log actor and critic loss
                     self.logger['pos_actor_losses'].append(pos_actor_loss.item())
@@ -386,8 +394,19 @@ class PPO:
         acg_critic_loss: float = mean(self.logger['critic_losses'])
         avg_pos_entropy: float = mean(self.logger['pos_entropy'])
         avg_sym_entropy: float = mean(self.logger['sym_entropy'])
+        pos_histogram = self.logger['positions_histogram']
+        sym_histogram = self.logger['symbols_histogram']
+        global_pos_entropy = Categorical(pos_histogram/pos_histogram.sum()).entropy().mean().item()
+        global_sym_entropy = Categorical(sym_histogram/sym_histogram.sum()).entropy().mean().item()
 
-        logger.info(f"iter: {i_so_far}, timesteps so far: {t_so_far}, iteration took {delta_t:.2f} secs")
+        logger.info("*" * 20)
+        logger.info(f"ITER: {i_so_far}, timesteps so far: {t_so_far}, iteration took {delta_t:.2f} secs")
+        logger.info(
+            f"positions histogram: {pos_histogram}, "
+        )
+        logger.info(
+            f"symbols histogram: {sym_histogram}, "
+        )
         logger.info(
             f"avg episodic len: {avg_ep_lens}, "
             f"avg episodic rewards: {avg_ep_rews:.5f}, min episodic rewards: {min_ep_rews:.5f}, "
@@ -416,15 +435,17 @@ class PPO:
                 'avg_pos_actor_loss': avg_pos_actor_loss,
                 'avg_sym_actor_loss': avg_sym_actor_loss,
                 'avg_critic_loss': acg_critic_loss,
-                'avg_pos_entropy': avg_pos_entropy,
-                'avg_sym_entropy': avg_sym_entropy,
+                'pos_actor_avg_entropy': avg_pos_entropy,
+                'sym_actor_avg_entropy': avg_sym_entropy,
+                'simulation_pos_entropy': global_pos_entropy,
+                'simulation_sym_entropy': global_sym_entropy,
 
             }, commit=True
         )
 
         self.result_saver.save(
                 f"last", i_so_far,
-                self.actor_critic, commit=True
+                self.actor_critic, self.pos_tags_to_symbols,commit=True
             )
         logger.info("\n")
 
