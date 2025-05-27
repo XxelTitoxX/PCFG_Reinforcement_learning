@@ -125,6 +125,12 @@ class Sentence:
     Symbols in the sentence.
     e.g., ['I', 'say', '<num>']
     """
+    symbols_idx: list[int] = field(init=False)
+    """
+    Indices of the words in the sentence, provided by global corpus indexing.
+    e.g., [0, 1, 2] where 0 is 'I', 1 is 'say', and 2 is '<num>'.
+    """
+
     actions: list[Action] = field(init=False)
     """
     Actions in the sentence.

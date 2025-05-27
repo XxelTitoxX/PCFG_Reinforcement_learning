@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
 import torch.nn.utils.rnn as rnn_utils
+from grammar_env.corpus.sentence import Sentence
 
 
 
@@ -182,4 +183,144 @@ class TransformerEmbedding(nn.Module):
         encoded_sequence = x[:, 1:]
 
         return cls_representation, encoded_sequence
+    
+from transformers import XLNetTokenizer, XLNetModel
 
+class XLNetWordEmbedder(torch.nn.Module):
+    def __init__(self, device, model_name='xlnet-base-cased'):
+        super().__init__()
+        self.tokenizer = XLNetTokenizer.from_pretrained(model_name)
+        self.model = XLNetModel.from_pretrained(model_name)
+        self.model.eval()  # no dropout in eval mode
+        self.device = device
+        self.model.to(device)
+    
+    def forward(self, batch_sentences : list[Sentence]):
+        """
+        Args:
+            batch_sentences (list[Sentence]): A batch of sentences
+        Returns:
+            torch.Tensor: A tensor of shape (batch_size, sequence_length, embedding_dim) cotaining word-level embeddings
+        """
+        # Join word tokens into sentences (XLNet tokenizer expects string input)
+        batch_word_sentences = [sentence.symbols for sentence in batch_sentences]
+        sentences = [" ".join(words) for words in batch_word_sentences]
+        
+        # Tokenize sentences as a batch
+        encoded_inputs = self.tokenizer(
+            sentences,
+            return_tensors='pt',
+            padding=True,
+            truncation=True,
+            is_split_into_words=False  # we joined them above
+        )
+        
+        # Move tensors to the correct device
+        encoded_inputs = {k: v.to(self.device) for k, v in encoded_inputs.items()}
+        
+        # Forward pass through XLNet
+        with torch.no_grad():
+            outputs = self.model(**encoded_inputs)
+        
+        # Last hidden states: (batch_size, sequence_length, hidden_size)
+        last_hidden_states = outputs.last_hidden_state
+        
+        return last_hidden_states
+    
+class TagEmbedder(nn.Module):
+    def __init__(self, tag_dim, embedding_dim):
+        super(TagEmbedder, self).__init__()
+        self.embedding = nn.Embedding(tag_dim+1, embedding_dim, padding_idx=0) # +1 for padding index
+        self.embedding_dim = embedding_dim
+        self.tag_dim = tag_dim
+        
+    def forward(self, tags):
+        """
+        Args:
+            tags (torch.Tensor): Tensor of shape (batch_size, max_seq_len) with integer indices for tags (-1 for padding)
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, max_seq_len, embedding_dim)
+        """
+        shifted_tags = tags + 1
+        return self.embedding(shifted_tags.long())  # Ensure tags are long type for embedding lookup
+    
+class IndexWordEmbedder(nn.Module):
+    def __init__(self, vocab_size, embedding_dim):
+        super(IndexWordEmbedder, self).__init__()
+        self.embedding = nn.Embedding(vocab_size + 1, embedding_dim, padding_idx=0)  # +1 for padding index
+        self.embedding_dim = embedding_dim
+        self.state_dim = vocab_size
+        
+    def forward(self, batch_sentences: list[Sentence]):
+        """
+        Args:
+            indices (torch.Tensor): Tensor of shape (batch_size, max_seq_len) with integer indices (-1 for padding)
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, max_seq_len, embedding_dim)
+        """
+        device = next(self.parameters()).device
+        indices : list[torch.Tensor] = [torch.tensor(sentence.symbols_idx, device=device) for sentence in batch_sentences]
+        indices = torch.nn.utils.rnn.pad_sequence(indices, batch_first=True, padding_value=-1)
+
+        shifted_indices = indices + 1
+        return self.embedding(shifted_indices.long())  # Ensure indices are long type for embedding lookup
+    
+class WordTagEmbedder(nn.Module):
+    def __init__(self, tag_embedder : nn.Module, word_embedder : nn.Module, embedding_dim):
+        super(WordTagEmbedder, self).__init__()
+        self.word_embedder = word_embedder
+        self.tag_embedder = tag_embedder
+        self.embedding_dim = embedding_dim
+        self.projection = nn.Sequential(
+            nn.Linear(word_embedder.embedding_dim + tag_embedder.embedding_dim, embedding_dim),
+            nn.ReLU(),
+            nn.Linear(embedding_dim, embedding_dim)
+        )
+    def forward(self, batch_sentences: list[Sentence]):
+        """
+        Args:
+            batch_sentences (list[Sentence]): A batch of sentences
+        Returns:
+            torch.Tensor: A tensor of shape (batch_size, max_seq_len, embedding_dim) containing word-tag embeddings
+            It concatenates word and tag embeddings and projects them onto embedding_dim.
+        """
+        word_embeddings = self.word_embedder(batch_sentences)
+        device = word_embeddings.device
+        pos_tags = [torch.tensor(sentence.pos_tags, device=device) for sentence in batch_sentences]
+        pos_tags = torch.nn.utils.rnn.pad_sequence(pos_tags, batch_first=True, padding_value=-1)
+        tag_embeddings = self.tag_embedder(pos_tags)
+        
+        # Concatenate word and tag embeddings
+        combined_embeddings = torch.cat((word_embeddings, tag_embeddings), dim=-1)
+        # Project to the desired embedding dimension
+        projected_embeddings = self.projection(combined_embeddings)
+        return projected_embeddings
+
+
+class InductionTagger(nn.Module):
+    def __init__(self, embedding_dim):
+        super(InductionTagger, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(3*embedding_dim, 3*embedding_dim),
+            nn.ReLU(),
+            nn.Linear(3*embedding_dim, embedding_dim)
+        )
+        
+    def forward(self, tag_embeddings: torch.Tensor, left_embeddings: torch.Tensor, right_embeddings: torch.Tensor):
+        """
+        Args:
+            tag_embeddings (torch.Tensor): Tensor of shape (batch_size, embedding_dim) containing tag embeddings for new abstract constituent
+            left_embeddings (torch.Tensor): Tensor of shape (batch_size, embedding_dim) containing embedding for left child
+            right_embeddings (torch.Tensor): Tensor of shape (batch_size, embedding_dim) containing embedding for right child
+        Returns:
+            torch.Tensor: A tensor of shape (batch_size, embedding_dim) containing new abstract constituent embeddings
+        """
+        assert tag_embeddings.shape[1] == left_embeddings.shape[1] == right_embeddings.shape[1] == self.embedding_dim, f"Tag ({tag_embeddings.shape[1]}), left child({left_embeddings.shape[1]}) and right child({right_embeddings.shape[1]}) embeddings must match embedding dimension ({self.embedding_dim})"
+        assert left_embeddings.shape[1] == self.embedding_dim, "Left embeddings must match embedding dimension"
+        assert right_embeddings.shape[1] == self.embedding_dim, "Right embeddings must match embedding dimension"
+        # Concatenate tag, left, and right embeddings
+        combined_embeddings = torch.cat((tag_embeddings, left_embeddings, right_embeddings), dim=-1)
+        # Pass through MLP
+        new_embeddings = self.mlp(combined_embeddings)
+        return new_embeddings

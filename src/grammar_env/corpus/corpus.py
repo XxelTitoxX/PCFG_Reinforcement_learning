@@ -81,10 +81,7 @@ class Corpus:
     def __post_init__(self):
         self._initialize_sentences()
         self._initialize_symbol_idx()
-        self._initialize_NT_histogram()
-        self._initialize_PT_histogram()
-        print(f"NT histogram: {self.symbol_freq}")
-        print(f"PT histogram: {self.pt_freq}")
+        self._apply_symbol_idx()
         logger.info(
             f"Read corpus of length {len(self)} from {self.ptb_path}, "
             f"min_sentence_length={self.min_sentence_length}, "
@@ -141,6 +138,16 @@ class Corpus:
         for idx, (symbol, _) in enumerate(symbol_count, 3):
             self.symbol_to_idx[symbol] = idx
             self.idx_to_symbol[idx] = symbol
+
+    def _apply_symbol_idx(self):
+        """
+        Apply the symbol_to_idx mapping to the sentences in the corpus.
+        This will initialize the symbols_idx field of each sentence based on the symbols field.
+        """
+        for sentence in self.sentences:
+            sentence.symbols_idx = [
+                self.symbol_to_idx.get(symbol, 1) for symbol in sentence.symbols
+            ]
 
     def _initialize_NT_histogram(self) -> None:
         """
