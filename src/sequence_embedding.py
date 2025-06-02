@@ -187,13 +187,13 @@ class TransformerEmbedding(nn.Module):
 from transformers import XLNetTokenizer, XLNetModel
 
 class XLNetWordEmbedder(torch.nn.Module):
-    def __init__(self, device, model_name='xlnet-base-cased'):
+    def __init__(self, embedding_dim, model_name='xlnet-base-cased'):
         super().__init__()
         self.tokenizer = XLNetTokenizer.from_pretrained(model_name)
         self.model = XLNetModel.from_pretrained(model_name)
         self.model.eval()  # no dropout in eval mode
-        self.device = device
-        self.model.to(device)
+        self.embedding_dim = embedding_dim
+        self.projection = nn.Linear(self.model.config.hidden_size, embedding_dim)
     
     def forward(self, batch_sentences : list[Sentence]):
         """
@@ -202,6 +202,7 @@ class XLNetWordEmbedder(torch.nn.Module):
         Returns:
             torch.Tensor: A tensor of shape (batch_size, sequence_length, embedding_dim) cotaining word-level embeddings
         """
+        device = next(self.parameters()).device
         # Join word tokens into sentences (XLNet tokenizer expects string input)
         batch_word_sentences = [sentence.symbols for sentence in batch_sentences]
         sentences = [" ".join(words) for words in batch_word_sentences]
@@ -216,7 +217,7 @@ class XLNetWordEmbedder(torch.nn.Module):
         )
         
         # Move tensors to the correct device
-        encoded_inputs = {k: v.to(self.device) for k, v in encoded_inputs.items()}
+        encoded_inputs = {k: v.to(device) for k, v in encoded_inputs.items()}
         
         # Forward pass through XLNet
         with torch.no_grad():
@@ -224,8 +225,11 @@ class XLNetWordEmbedder(torch.nn.Module):
         
         # Last hidden states: (batch_size, sequence_length, hidden_size)
         last_hidden_states = outputs.last_hidden_state
+
+        projected_states = self.projection(last_hidden_states)  # Project to embedding_dim
+        # The output shape is (batch_size, sequence_length, embedding_dim)
         
-        return last_hidden_states
+        return projected_states
     
 class TagEmbedder(nn.Module):
     def __init__(self, tag_dim, embedding_dim):
@@ -297,9 +301,9 @@ class WordTagEmbedder(nn.Module):
         return projected_embeddings
 
 
-class InductionTagger(nn.Module):
+class InductionEmbedder(nn.Module):
     def __init__(self, embedding_dim):
-        super(InductionTagger, self).__init__()
+        super(InductionEmbedder, self).__init__()
         self.embedding_dim = embedding_dim
         self.mlp = nn.Sequential(
             nn.Linear(3*embedding_dim, 3*embedding_dim),
@@ -324,3 +328,52 @@ class InductionTagger(nn.Module):
         # Pass through MLP
         new_embeddings = self.mlp(combined_embeddings)
         return new_embeddings
+    
+class TransformerLayer(nn.Module):
+    def __init__(self, embedding_dim, num_layers, max_seq_len=60, num_heads=2, dropout=0.1):
+        super().__init__()
+
+        self.embedding_norm = nn.LayerNorm(embedding_dim)
+        self.positional_encoding = PositionalEncoding(embedding_dim, max_seq_len)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embedding_dim,
+            nhead=num_heads,
+            dim_feedforward=embedding_dim*2,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embedding_dim))  # CLS token for global representation
+
+    def forward(self, emb_sequence, mask=None):
+        """
+        emb_sequence: Tensor of shape (batch, max_seq_len, embedding_dim)
+        mask: Optional mask of shape (batch, max_seq_len) where False indicates padding
+        """
+        batch_size = emb_sequence.size(0)
+
+        if mask is None:
+            mask = torch.ones(batch_size, emb_sequence.size(1), dtype=torch.bool, device=emb_sequence.device)
+
+        # Embed actions
+        x = self.positional_encoding(emb_sequence)  # (batch, seq_len, embedding_dim)
+        x = self.embedding_norm(x)
+
+        # Add CLS token at position 0
+        cls_token = self.cls_token.expand(batch_size, -1, -1)  # (batch, 1, embedding_dim)
+        x = torch.cat([cls_token, x], dim=1)  # (batch, seq_len + 1, embedding_dim)
+
+        # Update the mask (CLS token is not masked)
+        cls_mask = torch.ones(batch_size, 1, dtype=torch.bool, device=mask.device)
+        mask = torch.cat([cls_mask, mask], dim=1)  # (batch, seq_len + 1)
+
+        attn_mask = ~mask  # Transformer expects True for padding
+        x = self.transformer_encoder(x, src_key_padding_mask=attn_mask)
+
+        # Extract the CLS token embedding (global representation)
+        cls_representation = x[:, 0]  # (batch, embedding_dim)
+
+        encoded_sequence = x[:, 1:]
+
+        return cls_representation, encoded_sequence

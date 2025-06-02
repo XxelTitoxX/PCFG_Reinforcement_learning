@@ -2,7 +2,7 @@ import torch
 from typing import Optional
 from logging import getLogger
 from actor_critic import ActorCritic
-from grammar_env.corpus.sentence import GoldSpan
+from grammar_env.corpus.sentence import Sentence
 import time
 
 logger = getLogger(__name__)
@@ -51,37 +51,6 @@ def fuse_and_shift(arr: torch.Tensor, idx: torch.Tensor, value: torch.Tensor, pa
         arr_copy[i, -1] = padding_value
     
     return arr_copy
-
-def test_fuse_and_shift():
-    arr = torch.tensor([[31, 31, 31, 31, 31, 26, 27, 30, 31, 35, 27, 31, 29, 28, 31, 26, 33, 35,                                                                                                     
-         29, 28, 31, 37, 35, 26, 33, 33, 35, 28, 27, 27, 31, 31, 36, 35, 28, 31,                                                                                                                    
-         29, 28, 31, 31, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,                                                                                                                    
-         -1, -1, -1],                                                                                                                                                                               
-        [29, 31, 31, 31, 31, 31, 31, 31, 31, 35, 29, 27, 33, 27, 31, -1, -1, -1,                                                                                                                    
-         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,                                                                                                                    
-         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,                                                                                                                    
-         -1, -1, -1],                                                                                                                                                                               
-        [32, 35, 33, 30, 31, 29, 32, 31, 31, 35, 31, 31, 28, 31, 29, 28, 31, 31,                                                                                                                    
-         31, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,                                                                                                                    
-         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,                                                                                                                    
-         -1, -1, -1]], dtype=torch.int32)
-    idx = torch.tensor([3,5,2], dtype=torch.int32)
-    value = torch.tensor([8,8,1], dtype=torch.int32)
-    padding_value = -1
-    expected_result = torch.tensor([[ 8,  8,  8,  8, 26, 27, 30, 31, 35, 27, 31, 29, 28, 31, 26, 33, 35, 29,                                                                                                     
-         28, 31, 37, 35, 26, 33, 33, 35, 28, 27, 27, 31, 31, 36, 35, 28, 31, 29,                                                                                                                    
-         28, 31, 31, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,                                                                                                                    
-         -1, -1, -1],                                                                                                                                                                               
-        [ 8,  8,  8,  8,  8,  8, 31, 31, 35, 29, 27, 33, 27, 31, -1, -1, -1, -1,
-         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-         -1, -1, -1],
-        [ 8,  8,  1, 31, 29, 32, 31, 31, 35, 31, 31, 28, 31, 29, 28, 31, 31, 31,
-         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-         -1, -1, -1]], dtype=torch.int32)
-    result = fuse_and_shift(arr, idx, value, padding_value)
-    print(f"Expected {expected_result}, but got {result}")
     
 
 def fuse_spans_and_shift(arr: torch.Tensor, idx: torch.Tensor, padding_value):
@@ -151,17 +120,13 @@ class Environment:
         self.done : torch.Tensor = torch.zeros(num_episodes, dtype=torch.bool, device=device)
         self.ep_len : torch.Tensor = torch.full((num_episodes,), max_num_steps, dtype=torch.int32, device=device)
 
-    def reset(self, batch_sentences: torch.Tensor, batch_spans: list[dict[tuple[int, int], int]]):
-        # batch_sentences: [num_episodes, sentence_length]
-        self.state = torch.full(
-            (self.num_episodes, self.max_num_steps + 1, batch_sentences.size(1)),
-            -1,
-            dtype=torch.int32,
-            device=self.device
-        )
+    def reset(self, batch_sentences, batch_s_embeddings: torch.Tensor, batch_spans: list[dict[tuple[int, int], int]]):
+        # batch_sentences: [num_episodes, sentence_length, embedding dim]
+        max_seq_len = batch_sentences.size(1)
+        self.sentences = batch_sentences
+        self.state = batch_s_embeddings.to(self.device)
         self.gt_spans = batch_spans
-        self.state[:, 0, :] = batch_sentences.to(self.device)
-        self.sentence_lengths = batch_sentences.ne(-1).sum(dim=1).to(self.device)
+        self.sentence_lengths = torch.tensor([len(sentence.symbols) for sentence in batch_sentences], device=self.device, dtype=torch.int32)
 
         self.spans_sentences = torch.full(
             (self.num_episodes, batch_sentences.size(1), 2),
@@ -170,8 +135,8 @@ class Environment:
             device=self.device
         )
 
-        valid_symbols = batch_sentences != -1
-        start_spans = torch.arange(batch_sentences.size(1), device=self.device, dtype=torch.int32)
+        valid_symbols = torch.arange(max_seq_len, device=self.device, dtype=torch.int32)[None, :] < self.sentence_lengths[:, None]
+        start_spans = torch.arange(max_seq_len, device=self.device, dtype=torch.int32)
         all_start_spans = torch.stack([start_spans, start_spans], dim=1)  # [length, 2]
         all_start_spans = all_start_spans.unsqueeze(0).repeat(self.num_episodes, 1, 1)
         self.spans_sentences[valid_symbols] = all_start_spans[valid_symbols]
@@ -199,37 +164,19 @@ class Environment:
         self.done = mask.to(self.device)
         self.ep_len[mask] = torch.minimum(self.ep_len[mask], torch.tensor(self.step_count, device=self.device))
 
-    def step(self, positions: torch.Tensor, positions_log_probs: torch.Tensor, symbols: torch.Tensor, symbols_log_probs: torch.Tensor):
-        # Print summary for first sentence
-        #logger.info(f"GT spans: {self.gt_spans[0]}")
-        #logger.info(f"Step {self.step_count}:")
-        #logger.info(f"Current state: {self.state[0, self.step_count, :].tolist()}")
-        #logger.info(f"Current spans: {self.spans_sentences[0, :].tolist()}")
-
+    def step(self, positions: torch.Tensor, positions_log_probs: torch.Tensor, symbols: torch.Tensor, symbols_log_probs: torch.Tensor, new_constituents: torch.Tensor):
         not_done = ~self.done
         not_done_idx = torch.arange(self.num_episodes, device=self.device)[not_done]
-        #if not_done[0].item():
-        #    logger.info(f"Pred positions: {positions[0].item()}, Pred symbols: {symbols[0].item()}")
         assert positions.shape == positions_log_probs.shape == symbols.shape == symbols_log_probs.shape == (not_done.sum().item(),), f"Shape mismatch: {positions.shape}, {positions_log_probs.shape}, {symbols.shape}, {symbols_log_probs.shape}, {(not_done.sum().item(),)}"
 
-        current_state = self.state[not_done, self.step_count, :]
+        current_state = self.state[not_done]
         current_spans = self.spans_sentences[not_done]
 
-        self.state[:, self.step_count + 1, :] = self.state[:, self.step_count, :]
-        if self.supervised:
-            gt_positions, gt_symbols, gt_new_spans = self.gt_pos_sym_span()
-            #if not_done[0].item():
-            #    logger.info(f"GT positions: {gt_positions[0].item()}, GT symbols: {gt_symbols[0].item()}")
+        next_sentence = fuse_and_shift(current_state, positions, new_constituents, -1)
+        next_spans, new_spans = fuse_spans_and_shift(current_spans, positions, -1)
 
-            next_sentence = fuse_and_shift(current_state, gt_positions, gt_symbols, -1)
-            next_spans, new_spans = fuse_spans_and_shift(current_spans, gt_positions, -1)
-            assert (gt_new_spans == new_spans).all(), f"New spans do not match gt_new_spans: {new_spans} != {gt_new_spans}"
-        else:
-            next_sentence = fuse_and_shift(current_state, positions, symbols, -1)
-            next_spans, new_spans = fuse_spans_and_shift(current_spans, positions, -1)
-
-        self.state[not_done, self.step_count + 1, :] = next_sentence
-        self.spans_sentences[not_done, :, :] = next_spans
+        self.state[not_done] = next_sentence
+        self.spans_sentences[not_done] = next_spans
 
         for i in range(len(new_spans)):
             self.spans_lists[not_done_idx[i]].append((new_spans[i, 0].item(), new_spans[i, 1].item()))
@@ -239,16 +186,8 @@ class Environment:
         self.symbols[not_done, self.step_count] = symbols
         self.symbols_log_probs[not_done, self.step_count] = symbols_log_probs
 
-        if self.supervised:
-            row_indices = torch.arange(current_spans.shape[0])
-            pred_new_spans = torch.stack([
-                current_spans[row_indices, positions, 0],
-                current_spans[row_indices, positions + 1, 1]
-            ], dim=1)
-
-            self.rew[not_done, self.step_count], self.sym_rew[not_done, self.step_count] = self.supervised_spans_reward_v2(not_done, pred_new_spans, gt_new_spans, symbols)
-        else:
-            self.rew[not_done, self.step_count], self.sym_rew[not_done, self.step_count] = self.supervised_spans_reward(not_done, new_spans, symbols)
+        
+        self.rew[not_done, self.step_count], self.sym_rew[not_done, self.step_count] = self.supervised_spans_reward(not_done, new_spans, symbols)
 
         #logger.info(f"Position reward: {self.rew[0, self.step_count].item()}, Symbol reward: {self.sym_rew[0, self.step_count].item()}")
 
@@ -257,7 +196,7 @@ class Environment:
 
     def get_state(self):
         not_done = ~self.done
-        current_state, _ = min_padding(self.state[not_done, self.step_count, :])
+        current_state, _ = min_padding(self.state[not_done])
         return current_state, not_done
 
     def get_rewards(self):
@@ -386,13 +325,16 @@ class Environment:
                 #torch.tensor(mask_symbol, dtype=torch.bool, device=self.device), \
     
 
-    def rollout(self, actor_critic: ActorCritic, batch_sentences: torch.Tensor, batch_spans: list[dict[tuple[int, int]]], evaluate: bool = False):
+    def rollout(self, actor_critic: ActorCritic, batch_sentences: list[Sentence], batch_spans: list[dict[tuple[int, int]]], evaluate: bool = False):
         """
         Collect batch of data from simulation.
         As PPO is an on-policy algorithm, we need to collect a fresh batch
         of data each time we iterate the actor/critic networks.
 
-        :return: RolloutBuffer containing the batch data
+        :param actor_critic: ActorCritic model to use for the rollout.
+        :param batch_sentences: Batch of sentences to use for the rollout (list[Sentence]).
+        :param batch_spans: List of spans for each sentence in the batch.
+        :param evaluate: If True, the model will not sample actions but take the most probable ones.
         """
         time_s = time.time()
 
@@ -400,21 +342,17 @@ class Environment:
 
         actor_critic.eval()
 
-        batch_sentences = batch_sentences.to(self.device)
+        batch_s_embeddings = actor_critic.encode_sentence(batch_sentences)
 
         # Reset the environment.
-        self.reset(batch_sentences, batch_spans)
+        self.reset(batch_sentences, batch_s_embeddings, batch_spans)
 
         # Run an episode for max_timesteps_per_episode timesteps
         ep_t: int = 0
         for ep_t in range(self.max_num_steps):
 
             current_states, not_done = self.get_state()
-            if self.supervised:
-                gt_positions, _, _ = self.gt_pos_sym_span()
-                position, position_log_prob, symbol, symbol_log_prob, _ = actor_critic.act(current_states, max_prob=evaluate, gt_positions=gt_positions)
-            else:
-                position, position_log_prob, symbol, symbol_log_prob, _ = actor_critic.act(current_states, max_prob=evaluate)
+            position, position_log_prob, symbol, symbol_log_prob, _ = actor_critic.act(current_states, max_prob=evaluate)
             assert position.shape == position_log_prob.shape == symbol.shape == symbol_log_prob.shape == (not_done.sum().item(),), f"Shape mismatch: {position.shape}, {position_log_prob.shape}, {symbol.shape}, {symbol_log_prob.shape}, {(not_done.sum().item(),)}"
 
             self.step(position, position_log_prob, symbol, symbol_log_prob)
@@ -424,3 +362,27 @@ class Environment:
         
         logger.info(f"Rollout done. {self.num_episodes} episodes ran in {time.time() - time_s: .2f} secs")
 
+    def replay(self, actor_critic: ActorCritic):
+        """
+        Replay the preceding simulation, in order to collect current log probabilities and state values for PPO loss.
+
+        :param actor_critic: ActorCritic model to use for the replay.
+        """
+        actor_critic.train()
+        self.reset(self.state[:, 0, :], self.sentence_lengths, self.gt_spans)
+
+        # Run an episode for max_timesteps_per_episode timesteps
+        ep_t: int = 0
+        for ep_t in range(self.max_num_steps):
+
+            current_states, not_done = self.get_state()
+            position, position_log_prob, symbol, symbol_log_prob, _ = actor_critic.act(current_states, max_prob=True)
+            left = current_states[torch.arange(not_done.sum().item()), position, :]
+            right = current_states[torch.arange(not_done.sum().item()), position + 1, :]
+            new_constituent = actor_critic.fuse_constituents(symbol, left, right)
+            assert position.shape == position_log_prob.shape == symbol.shape == symbol_log_prob.shape == (not_done.sum().item(),), f"Shape mismatch: {position.shape}, {position_log_prob.shape}, {symbol.shape}, {symbol_log_prob.shape}, {(not_done.sum().item(),)}"
+
+            self.step(position, position_log_prob, symbol, symbol_log_prob, new_constituent)
+
+            if self.stop():
+                break

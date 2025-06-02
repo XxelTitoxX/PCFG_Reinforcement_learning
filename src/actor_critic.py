@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
-from sequence_embedding import EnhancedTransformerEmbedding, TransformerEmbedding
+from sequence_embedding import EnhancedTransformerEmbedding, TransformerEmbedding, TagEmbedder, WordTagEmbedder, XLNetWordEmbedder, IndexWordEmbedder, InductionEmbedder, TransformerLayer
 
 logger = getLogger(__name__)
 
@@ -78,11 +78,11 @@ def map_scores_to_sentences(embedding_pairs_scores: torch.Tensor, sequence_lengt
             idx += num_pairs
 
     return output
-
+    
 
 class ActorCritic(nn.Module):
     def __init__(
-            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int, rule_mask_on: bool = False
+            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int
     ):
         super().__init__()
 
@@ -93,10 +93,15 @@ class ActorCritic(nn.Module):
         assert self.n_layer > 0, f"n_layer must be greater than 0, got {self.n_layer}"
         assert self.embedding_dim > 0, f"embedding_dim must be greater than 0, got {self.embedding_dim}"
 
-        self.state_encoder: EnhancedTransformerEmbedding = TransformerEmbedding(state_dim=state_dim, embedding_dim=embedding_dim,
-                                                            num_layers=n_layer,
-                                                            max_seq_len=60, num_heads=num_heads, dropout=0.0
-                                                          )
+        self.tag_embedder: TagEmbedder = TagEmbedder(tag_dim=state_dim, embedding_dim=embedding_dim//2)
+        self.word_embedder: XLNetWordEmbedder = XLNetWordEmbedder(embedding_dim=embedding_dim//2)
+        self.word_tag_embedder: WordTagEmbedder = WordTagEmbedder(
+            word_embedder=self.word_embedder, tag_embedder=self.tag_embedder, embedding_dim=embedding_dim
+        )
+        self.induction_embedder: InductionEmbedder = InductionEmbedder(
+            embedding_dim=embedding_dim
+        )
+        self.transformer_layer: TransformerLayer = TransformerLayer(embedding_dim=embedding_dim, num_heads=num_heads, num_layers=n_layer)
 
         # discrete actor
         self.position_actor: nn.Sequential = nn.Sequential(
@@ -118,10 +123,6 @@ class ActorCritic(nn.Module):
             nn.Linear(embedding_dim, 1),
         )
 
-        self.r_mask_on: bool = rule_mask_on
-        if self.r_mask_on:
-            self.rule_mask : nn.Parameter = nn.Parameter(torch.zeros((action_dim, state_dim, state_dim), dtype=torch.float32))
-
         logger.info(
             f"ActorCritic initialized with {sum(p.numel() for p in self.parameters()):,} parameters, "
             f"state_dim={state_dim}, action_dim={action_dim}, "
@@ -131,33 +132,42 @@ class ActorCritic(nn.Module):
     def forward(self):
         raise NotImplementedError
 
-    def encode_state(self, state: torch.Tensor) -> torch.Tensor:
+    def encode_state(self, state: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         Encode the state to a tensor of dimension H.
-        :param state: torch.Tensor of shape (B, SEQ)
-                where B is the batch size, SEQ, is the sequence max length
+        :param state: torch.Tensor of shape (B, SEQ, E)
+                where B is the batch size, SEQ, is the sequence max length, E is the embedding dim
         :return: cls_token, seq_embedding, both torch.Tensor of respective shape (B, E) and (B, SEQ, E), E standing for embedding dimension
         """
-        assert len(state.shape) == 2, f"state must be a 3d tensor (batch_size, seq_max_len), got {state.shape}"
-        assert torch.all((state >= -1) & (state < self.state_dim)), f"state must be in range [0, state_dim), got {state.min()}, {state.max()}"
-        cls_token, sequence_embedding = self.state_encoder(state)
+        assert len(state.shape) == 3, f"state must be a 3d tensor (batch_size, seq_max_len, embedding_dim), got {state.shape}"
+        cls_token, sequence_embedding = self.transformer_layer(state, mask=mask)
         return cls_token, sequence_embedding
+    
+    def encode_sentence(self, batch_sentences) -> torch.Tensor:
+        """
+        Gives word-level embedding for a batch of sentences.
+        batch_sentences: list[Sentence]
+        Returns: torch.Tensor of shape (batch_size, seq_max_len, embedding_dim)
+        """
+        return self.word_tag_embedder(batch_sentences)
+        
 
-    def act(self, states: torch.Tensor, max_prob:bool=False, gt_positions:torch.Tensor=None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def act(self, states: torch.Tensor, mask: torch.Tensor, max_prob:bool=False, gt_positions:torch.Tensor=None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Given a batch of states, sample an action for each state, calculate the action log probability, and new state value.
-        :param state: np.ndarray of shape (batch_size, seq_max_len) where each value is a symbol index (-1 is padding value, shifted by 1 when given to state_encoder)
+        :param state: torch.Tensor of shape (batch_size, seq_max_len, embedding_dim)
+        :param mask: torch.Tensor of shape (batch_size, seq_max_len) where 1 means the position is valid and 0 means it is padding
         :return: tuple of action, action log probability, and state value, all are np.ndarray of shape (batch_size,)
         """
 
         batch_size: int = states.shape[0]
-        sentence_lengths: torch.Tensor = torch.sum(states != -1, dim=1) # (batch_size,)
+        sentence_lengths: torch.Tensor = torch.sum(mask, dim=1) # (batch_size,)
         assert len(states.shape) == 2, (
             f"state must be a 2d tensor (batch_size, seq_max_len), got {states.shape}"
         )
 
         cls_token, sequence_embedding = self.encode_state(
-            states
+            states, mask
         ) # cls_token: (B, E), sequence_embedding: (B, SEQ, E)
         assert cls_token.shape == (batch_size, self.embedding_dim), (
             f"cls_token must have a shape ({batch_size},{self.embedding_dim}), got {cls_token.shape}"
@@ -237,7 +247,7 @@ class ActorCritic(nn.Module):
         return position_action.to(torch.int32), position_action_logprob, symbol_action.to(torch.int32), symbol_action_logprob, state_val
 
     def evaluate(
-            self, states: torch.Tensor, position_action: torch.Tensor, symbol_action: torch.Tensor
+            self, states: torch.Tensor, mask: torch.Tensor, position_action: torch.Tensor, symbol_action: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Given a batch of state and action, calculate the action log probability, entropy, and state value.
@@ -246,7 +256,7 @@ class ActorCritic(nn.Module):
         :return: tuple of action log probability, entropy, and state value, all are torch.Tensor of shape (batch_size,)
         """
         batch_size: int = states.shape[0]
-        sentence_lengths: torch.Tensor = torch.sum(states != -1, dim=1) # (batch_size,)
+        sentence_lengths: torch.Tensor = torch.sum(mask, dim=1) # (batch_size,)
         assert len(states.shape) == 2, (
             f"state must be a 2d tensor (batch_size, seq_max_len), got {states.shape}"
         )
@@ -256,7 +266,7 @@ class ActorCritic(nn.Module):
         assert position_action.shape == symbol_action.shape == (batch_size,), f'action must have a shape {(batch_size,)}, got {position_action.shape}, {symbol_action.shape}'
 
         cls_token, sequence_embedding = self.encode_state(
-            states
+            states, mask
         ) # cls_token: (B, E), sequence_embedding: (B, SEQ, E)
         assert cls_token.shape == (batch_size, self.embedding_dim), (
             f"cls_token must have a shape ({batch_size},{self.embedding_dim}), got {cls_token.shape}"
@@ -319,10 +329,10 @@ class ActorCritic(nn.Module):
 
         return position_action_logprob, position_entropy, symbol_action_logprob, symbol_entropy, state_val
     
-    def state_val(self, states: torch.Tensor) -> torch.Tensor:
+    def state_val(self, states: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
         Given a batch of state, calculate the state value from the critic network.
-        :param state: torch.Tensor of shape (batch_size, seq_max_len)
+        :param state: torch.Tensor of shape (batch_size, seq_max_len, enbedding_dim)
         :return: state value, torch.Tensor of shape (batch_size,)
         """
         batch_size: int = states.shape[0]
@@ -331,7 +341,7 @@ class ActorCritic(nn.Module):
         )
 
         cls_token, _ = self.encode_state(
-            states
+            states, mask
         ) # cls_token: (B, E), sequence_embedding: (B, SEQ, E)
         assert cls_token.shape == (batch_size, self.embedding_dim), (
             f"cls_token must have a shape ({batch_size},{self.embedding_dim}), got {cls_token.shape}"
@@ -339,6 +349,19 @@ class ActorCritic(nn.Module):
         # state_val: (B,1)
         state_val: torch.Tensor = self.critic(cls_token).squeeze(dim=1)
         return state_val
+    
+    def fuse_constituents(self, tag: torch.Tensor, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        """
+        Fuses the tag with the left and right constituents to create a new embedding.
+        :param tag: torch.Tensor of shape (batch_size, embedding_dim)
+        :param left: torch.Tensor of shape (batch_size, embedding_dim)
+        :param right: torch.Tensor of shape (batch_size, embedding_dim)
+        :return: torch.Tensor of shape (batch_size, embedding_dim)
+        """
+        assert tag.shape == left.shape == right.shape == (tag.shape[0], self.embedding_dim), (
+            f"tag, left, and right must have a shape ({tag.shape[0]}, {self.embedding_dim}), got {tag.shape}, {left.shape}, {right.shape}"
+        )
+        return self.induction_embedder(tag, left, right)
         
     
     def copy(self) -> "ActorCritic":
