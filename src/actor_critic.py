@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
-from sequence_embedding import EnhancedTransformerEmbedding, TransformerEmbedding, TagEmbedder, WordTagEmbedder, XLNetWordEmbedder, IndexWordEmbedder, InductionEmbedder, TransformerLayer
+from sequence_embedding import TagEmbedder, WordTagEmbedder, BertWordEmbedder, IndexWordEmbedder, InductionEmbedder, TransformerLayer, ConvEncoderLayer
 
 logger = getLogger(__name__)
 
@@ -82,7 +82,7 @@ def map_scores_to_sentences(embedding_pairs_scores: torch.Tensor, sequence_lengt
 
 class ActorCritic(nn.Module):
     def __init__(
-            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int
+            self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int, vocab_size: int
     ):
         super().__init__()
 
@@ -93,15 +93,17 @@ class ActorCritic(nn.Module):
         assert self.n_layer > 0, f"n_layer must be greater than 0, got {self.n_layer}"
         assert self.embedding_dim > 0, f"embedding_dim must be greater than 0, got {self.embedding_dim}"
 
-        self.tag_embedder: TagEmbedder = TagEmbedder(tag_dim=state_dim, embedding_dim=embedding_dim//2)
-        self.word_embedder: XLNetWordEmbedder = XLNetWordEmbedder(embedding_dim=embedding_dim//2)
+        self.tag_embedder: TagEmbedder = TagEmbedder(tag_dim=state_dim, embedding_dim=64)
+        #self.word_embedder: IndexWordEmbedder = IndexWordEmbedder(vocab_size=vocab_size, embedding_dim=embedding_dim)
+        self.word_embedder: BertWordEmbedder = BertWordEmbedder(embedding_dim=embedding_dim)
         self.word_tag_embedder: WordTagEmbedder = WordTagEmbedder(
-            word_embedder=self.word_embedder, tag_embedder=self.tag_embedder, embedding_dim=embedding_dim
+            word_embedder=self.word_embedder, tag_embedder=self.tag_embedder, embedding_dim=embedding_dim, num_nt=action_dim
         )
-        self.induction_embedder: InductionEmbedder = InductionEmbedder(
-            embedding_dim=embedding_dim
+        self.induction_embedder: InductionEmbedder = InductionEmbedder(tag_embedding_dim=64,
+            embedding_dim=embedding_dim, no_tag=False
         )
-        self.transformer_layer: TransformerLayer = TransformerLayer(embedding_dim=embedding_dim, num_heads=num_heads, num_layers=n_layer)
+        self.transformer_layer: ConvEncoderLayer = ConvEncoderLayer(embedding_dim=embedding_dim, num_layers=n_layer)
+        #self.transformer_layer: TransformerLayer = TransformerLayer(embedding_dim=embedding_dim, num_layers=n_layer, num_heads=num_heads, dropout=0.1)
 
         # discrete actor
         self.position_actor: nn.Sequential = nn.Sequential(
@@ -162,8 +164,8 @@ class ActorCritic(nn.Module):
 
         batch_size: int = states.shape[0]
         sentence_lengths: torch.Tensor = torch.sum(mask, dim=1) # (batch_size,)
-        assert len(states.shape) == 2, (
-            f"state must be a 2d tensor (batch_size, seq_max_len), got {states.shape}"
+        assert len(states.shape) == 3, (
+            f"state must be a 3d tensor (batch_size, seq_max_len, embedding_dim), got {states.shape}"
         )
 
         cls_token, sequence_embedding = self.encode_state(
@@ -196,21 +198,7 @@ class ActorCritic(nn.Module):
             position_action: torch.Tensor = dist.sample().long() # (batch_size,)
         position_action_logprob: torch.Tensor = dist.log_prob(position_action)
 
-        # Get according symbol pair
-        if self.r_mask_on:
-            # Get the indices for both positions
-            idx1 = torch.arange(batch_size, device=states.device)
-            pos1 = position_action
-            pos2 = position_action + 1
 
-            # Create symbol pairs
-            first_symbols = states[idx1, pos1]
-            second_symbols = states[idx1, pos2]
-            symbol_pair = torch.stack([first_symbols, second_symbols], dim=1)  # (batch_size, 2)
-            # symbol_pair : torch.Tensor = torch.tensor([states[torch.arange(batch_size, device=states.device), position_action], states[torch.arange(batch_size, device=states.device), position_action + 1]]).T # (batch_size, 2)
-            symbol_mask : torch.Tensor = retrieve_rule_mask(self.rule_mask, symbol_pair) # (batch_size, action_dim)
-        else:
-            symbol_mask = torch.zeros((batch_size, self.action_dim), device=states.device)
         if gt_positions is not None:
             symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), gt_positions], sequence_embedding[torch.arange(batch_size), gt_positions + 1]), dim=1) # (batch_size, embedding_dim*2)
         else:
@@ -218,7 +206,7 @@ class ActorCritic(nn.Module):
 
         # Calculate symbol scores for each pair
         symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair_emb) # (batch_size, action_dim)
-        symbol_scores = symbol_scores + symbol_mask
+        symbol_scores = symbol_scores #+ symbol_mask
         arbitrary_temperature = 1.0
         symbol_probs: torch.Tensor = torch.softmax(symbol_scores/arbitrary_temperature, dim=1) # (batch_size, action_dim)
 
@@ -247,7 +235,7 @@ class ActorCritic(nn.Module):
         return position_action.to(torch.int32), position_action_logprob, symbol_action.to(torch.int32), symbol_action_logprob, state_val
 
     def evaluate(
-            self, states: torch.Tensor, mask: torch.Tensor, position_action: torch.Tensor, symbol_action: torch.Tensor
+            self, states: torch.Tensor, mask: torch.Tensor, position_action: torch.Tensor, symbol_action: torch.Tensor, gt_positions: torch.Tensor=None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Given a batch of state and action, calculate the action log probability, entropy, and state value.
@@ -257,8 +245,8 @@ class ActorCritic(nn.Module):
         """
         batch_size: int = states.shape[0]
         sentence_lengths: torch.Tensor = torch.sum(mask, dim=1) # (batch_size,)
-        assert len(states.shape) == 2, (
-            f"state must be a 2d tensor (batch_size, seq_max_len), got {states.shape}"
+        assert len(states.shape) == 3, (
+            f"state must be a 2d tensor (batch_size, seq_max_len, embedding_dim), got {states.shape}"
         )
         assert torch.all(position_action >= 0) and torch.all(position_action < sentence_lengths-1), (
             f"action must be in range [0, sentence_length-2), got position action {position_action}, and sentence lengths{sentence_lengths}"
@@ -292,26 +280,14 @@ class ActorCritic(nn.Module):
         position_action_logprob: torch.Tensor = dist.log_prob(position_action)
         position_entropy: torch.Tensor = dist.entropy() # (batch_size,)
 
-        # Get according symbol pair
-        if self.r_mask_on:
-            # Get the indices for both positions
-            idx1 = torch.arange(batch_size, device=states.device)
-            pos1 = position_action
-            pos2 = position_action + 1
-
-            # Create symbol pairs
-            first_symbols = states[idx1, pos1]
-            second_symbols = states[idx1, pos2]
-            symbol_pair = torch.stack([first_symbols, second_symbols], dim=1)  # (batch_size, 2)
-            # symbol_pair : torch.Tensor = torch.tensor([states[torch.arange(batch_size, device=states.device), position_action], states[torch.arange(batch_size, device=states.device), position_action + 1]]).T # (batch_size, 2)
-            symbol_mask : torch.Tensor = retrieve_rule_mask(self.rule_mask, symbol_pair) # (batch_size, action_dim)
+        if gt_positions is not None:
+            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), gt_positions], sequence_embedding[torch.arange(batch_size), gt_positions + 1]), dim=1) # (batch_size, embedding_dim*2)
         else:
-            symbol_mask = torch.zeros((batch_size, self.action_dim), device=states.device)
-        symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
+            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
 
         # Calculate symbol scores for each pair
         symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair_emb) # (batch_size, action_dim)
-        symbol_scores = symbol_scores + symbol_mask
+        symbol_scores = symbol_scores #+ symbol_mask
         symbol_probs: torch.Tensor = torch.softmax(symbol_scores, dim=1) # (batch_size, action_dim)
 
         # Sample symbol action
@@ -350,7 +326,7 @@ class ActorCritic(nn.Module):
         state_val: torch.Tensor = self.critic(cls_token).squeeze(dim=1)
         return state_val
     
-    def fuse_constituents(self, tag: torch.Tensor, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    def fuse_constituents(self, tag: torch.Tensor, left: torch.Tensor, right: torch.Tensor, dropout:bool=False) -> torch.Tensor:
         """
         Fuses the tag with the left and right constituents to create a new embedding.
         :param tag: torch.Tensor of shape (batch_size, embedding_dim)
@@ -358,10 +334,24 @@ class ActorCritic(nn.Module):
         :param right: torch.Tensor of shape (batch_size, embedding_dim)
         :return: torch.Tensor of shape (batch_size, embedding_dim)
         """
-        assert tag.shape == left.shape == right.shape == (tag.shape[0], self.embedding_dim), (
-            f"tag, left, and right must have a shape ({tag.shape[0]}, {self.embedding_dim}), got {tag.shape}, {left.shape}, {right.shape}"
+        assert left.shape == right.shape == (tag.shape[0], self.embedding_dim), (
+            f"left, and right must have a shape ({tag.shape[0]}, {self.embedding_dim}), got {left.shape}, {right.shape}"
         )
-        return self.induction_embedder(tag, left, right)
+        #return tag + 0.4 * (left + right)  # Linear combination
+        #return tag
+        return self.induction_embedder(tag, left, right, dropout=dropout)
+    
+    def get_cls_token(self, states: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Returns the cls token for the given states.
+        :param states: torch.Tensor of shape (batch_size, seq_max_len, embedding_dim)
+        :param mask: torch.Tensor of shape (batch_size, seq_max_len) where 1 means the position is valid and 0 means it is padding
+        :return: cls_token, torch.Tensor of shape (batch_size, embedding_dim)
+        """
+        assert (states.shape[0] == mask.shape[0]) and (states.shape[1] == mask.shape[1]), (
+            f"states and mask must have the same shape, got {states.shape} and {mask.shape}")
+        cls_token, _ = self.encode_state(states, mask)
+        return cls_token
         
     
     def copy(self) -> "ActorCritic":

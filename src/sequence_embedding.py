@@ -27,6 +27,35 @@ class PositionalEncoding(nn.Module):
         
     def forward(self, x):
         return x + self.pe[:, :x.size(1), :]
+    
+class AttentionPooling(nn.Module):
+    def __init__(self, embedding_dim):
+        super().__init__()
+        self.attention_fc = nn.Linear(embedding_dim, 1)  # scalar score per token
+
+    def forward(self, sequence_embeddings, mask=None):
+        """
+        sequence_embeddings: Tensor of shape (batch, seq_len, embedding_dim)
+        mask: Optional mask of shape (batch, seq_len) where False indicates padding
+        """
+        batch_size, seq_len, embedding_dim = sequence_embeddings.size()
+
+        if mask is None:
+            mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=sequence_embeddings.device)
+
+        # Compute attention scores: (batch, seq_len, 1)
+        attn_scores = self.attention_fc(sequence_embeddings)  # (batch, seq_len, 1)
+
+        # Mask out padded positions
+        attn_scores = attn_scores.masked_fill(~mask.unsqueeze(-1), float('-inf'))
+
+        # Normalize to get attention weights
+        attn_weights = F.softmax(attn_scores, dim=1)  # (batch, seq_len, 1)
+
+        # Weighted sum of sequence embeddings
+        pooled_representation = (attn_weights * sequence_embeddings).sum(dim=1)  # (batch, embedding_dim)
+
+        return pooled_representation
 
 
 class EnhancedTransformerEmbedding(nn.Module):
@@ -184,14 +213,13 @@ class TransformerEmbedding(nn.Module):
 
         return cls_representation, encoded_sequence
     
-from transformers import XLNetTokenizer, XLNetModel
+from transformers import XLNetTokenizer, XLNetModel, BertTokenizerFast, TFBertModel
 
-class XLNetWordEmbedder(torch.nn.Module):
-    def __init__(self, embedding_dim, model_name='xlnet-base-cased'):
+class BertWordEmbedder(torch.nn.Module):
+    def __init__(self, embedding_dim, model_name='bert-base-cased'):
         super().__init__()
-        self.tokenizer = XLNetTokenizer.from_pretrained(model_name)
-        self.model = XLNetModel.from_pretrained(model_name)
-        self.model.eval()  # no dropout in eval mode
+        self.tokenizer = BertTokenizerFast.from_pretrained(model_name)
+        self.model = TFBertModel.from_pretrained(model_name)
         self.embedding_dim = embedding_dim
         self.projection = nn.Linear(self.model.config.hidden_size, embedding_dim)
     
@@ -203,33 +231,78 @@ class XLNetWordEmbedder(torch.nn.Module):
             torch.Tensor: A tensor of shape (batch_size, sequence_length, embedding_dim) cotaining word-level embeddings
         """
         device = next(self.parameters()).device
-        # Join word tokens into sentences (XLNet tokenizer expects string input)
-        batch_word_sentences = [sentence.symbols for sentence in batch_sentences]
-        sentences = [" ".join(words) for words in batch_word_sentences]
         
-        # Tokenize sentences as a batch
+        # Extract words from sentences
+        batch_word_sentences = [sentence.symbols for sentence in batch_sentences]
+        
+        # Get the actual number of words in each sentence
+        actual_word_counts = [len(words) for words in batch_word_sentences]
+        max_words_in_batch = max(actual_word_counts)
+        
+        
+        # Tokenize with word alignment tracking
         encoded_inputs = self.tokenizer(
-            sentences,
-            return_tensors='pt',
+            batch_word_sentences,
+            return_tensors='tf',
             padding=True,
             truncation=True,
-            is_split_into_words=False  # we joined them above
+            is_split_into_words=True,  # This is key for word alignment
+            return_offsets_mapping=False,
         )
         
-        # Move tensors to the correct device
-        encoded_inputs = {k: v.to(device) for k, v in encoded_inputs.items()}
+        # Get word_ids for each tokenized sequence
+        word_ids_batch = []
+        for i in range(len(batch_word_sentences)):
+            word_ids = encoded_inputs.word_ids(batch_index=i)
+            word_ids_batch.append([w if w is not None else -1 for w in word_ids])
         
-        # Forward pass through XLNet
+        # Forward pass through BERT
         with torch.no_grad():
             outputs = self.model(**encoded_inputs)
+            # Convert TensorFlow tensor to PyTorch
+            last_hidden_states = torch.from_numpy(outputs.last_hidden_state.numpy()).to(device)
         
-        # Last hidden states: (batch_size, sequence_length, hidden_size)
-        last_hidden_states = outputs.last_hidden_state
-
-        projected_states = self.projection(last_hidden_states)  # Project to embedding_dim
-        # The output shape is (batch_size, sequence_length, embedding_dim)
+        # Aggregate token embeddings to word embeddings
+        word_embeddings_batch = []
         
-        return projected_states
+        for batch_idx, word_ids in enumerate(word_ids_batch):
+            num_words = actual_word_counts[batch_idx]
+            
+            # Initialize word embeddings for this sentence (only for actual words)
+            word_embeddings = torch.zeros(num_words, last_hidden_states.size(-1), device=device)
+            word_token_counts = torch.zeros(num_words, device=device)
+            
+            # Aggregate tokens for each word
+            for token_idx, word_id in enumerate(word_ids):
+                if word_id >= 0 and word_id < num_words:  # Valid word ID within sentence
+                    word_embeddings[word_id] += last_hidden_states[batch_idx, token_idx]
+                    word_token_counts[word_id] += 1
+            
+            # Average the embeddings (avoid division by zero)
+            word_token_counts = torch.clamp(word_token_counts, min=1)
+            word_embeddings = word_embeddings / word_token_counts.unsqueeze(-1)
+            
+            word_embeddings_batch.append(word_embeddings)
+        
+        # Pad to max_words_in_batch and stack
+        padded_embeddings = []
+        
+        for word_embs in word_embeddings_batch:
+            current_words = word_embs.size(0)
+            if current_words < max_words_in_batch:
+                # Pad with zeros to reach max_words_in_batch
+                padding_size = max_words_in_batch - current_words
+                padding = torch.zeros(padding_size, word_embs.size(-1), device=device)
+                word_embs = torch.cat([word_embs, padding], dim=0)
+            padded_embeddings.append(word_embs)
+        
+        # Stack into batch tensor: (batch_size, max_words_in_batch, hidden_size)
+        batch_word_embeddings = torch.stack(padded_embeddings, dim=0)
+        
+        # Project to desired embedding dimension
+        projected_embeddings = self.projection(batch_word_embeddings)
+        
+        return projected_embeddings
     
 class TagEmbedder(nn.Module):
     def __init__(self, tag_dim, embedding_dim):
@@ -238,7 +311,7 @@ class TagEmbedder(nn.Module):
         self.embedding_dim = embedding_dim
         self.tag_dim = tag_dim
         
-    def forward(self, tags):
+    def forward(self, tags:torch.Tensor):
         """
         Args:
             tags (torch.Tensor): Tensor of shape (batch_size, max_seq_len) with integer indices for tags (-1 for padding)
@@ -267,11 +340,14 @@ class IndexWordEmbedder(nn.Module):
         indices = torch.nn.utils.rnn.pad_sequence(indices, batch_first=True, padding_value=-1)
 
         shifted_indices = indices + 1
+        assert shifted_indices.min() >= 0, f"Indices must be non-negative after shifting, got min {shifted_indices.min()}"
+        assert shifted_indices.max() < self.state_dim + 1, f"Indices must be less than {self.state_dim + 1} after shifting, got max {shifted_indices.max()}"
         return self.embedding(shifted_indices.long())  # Ensure indices are long type for embedding lookup
     
 class WordTagEmbedder(nn.Module):
-    def __init__(self, tag_embedder : nn.Module, word_embedder : nn.Module, embedding_dim):
+    def __init__(self, tag_embedder : nn.Module, word_embedder : nn.Module, embedding_dim:int, num_nt:int):
         super(WordTagEmbedder, self).__init__()
+        self.num_nt = num_nt
         self.word_embedder = word_embedder
         self.tag_embedder = tag_embedder
         self.embedding_dim = embedding_dim
@@ -290,7 +366,7 @@ class WordTagEmbedder(nn.Module):
         """
         word_embeddings = self.word_embedder(batch_sentences)
         device = word_embeddings.device
-        pos_tags = [torch.tensor(sentence.pos_tags, device=device) for sentence in batch_sentences]
+        pos_tags = [torch.tensor(sentence.pos_tags, device=device)+self.num_nt for sentence in batch_sentences]
         pos_tags = torch.nn.utils.rnn.pad_sequence(pos_tags, batch_first=True, padding_value=-1)
         tag_embeddings = self.tag_embedder(pos_tags)
         
@@ -300,18 +376,30 @@ class WordTagEmbedder(nn.Module):
         projected_embeddings = self.projection(combined_embeddings)
         return projected_embeddings
 
+        #return tag_embeddings
+
 
 class InductionEmbedder(nn.Module):
-    def __init__(self, embedding_dim):
+    def __init__(self, tag_embedding_dim:int, embedding_dim:int, no_tag:bool=False):
         super(InductionEmbedder, self).__init__()
         self.embedding_dim = embedding_dim
-        self.mlp = nn.Sequential(
-            nn.Linear(3*embedding_dim, 3*embedding_dim),
-            nn.ReLU(),
-            nn.Linear(3*embedding_dim, embedding_dim)
-        )
+        self.tag_embedding_dim = tag_embedding_dim
+        self.dropout_prob = 0.5
+        self.no_tag = no_tag
+        if no_tag:
+            self.mlp = nn.Sequential(
+                nn.Linear(2*embedding_dim, 2*embedding_dim),
+                nn.ReLU(),
+                nn.Linear(2*embedding_dim, embedding_dim)
+            )
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(2*embedding_dim + tag_embedding_dim, 2*embedding_dim + tag_embedding_dim),
+                nn.ReLU(),
+                nn.Linear(2*embedding_dim + tag_embedding_dim, embedding_dim)
+            )
         
-    def forward(self, tag_embeddings: torch.Tensor, left_embeddings: torch.Tensor, right_embeddings: torch.Tensor):
+    def forward(self, tag_embeddings: torch.Tensor, left_embeddings: torch.Tensor, right_embeddings: torch.Tensor, dropout:bool=False):
         """
         Args:
             tag_embeddings (torch.Tensor): Tensor of shape (batch_size, embedding_dim) containing tag embeddings for new abstract constituent
@@ -320,11 +408,15 @@ class InductionEmbedder(nn.Module):
         Returns:
             torch.Tensor: A tensor of shape (batch_size, embedding_dim) containing new abstract constituent embeddings
         """
-        assert tag_embeddings.shape[1] == left_embeddings.shape[1] == right_embeddings.shape[1] == self.embedding_dim, f"Tag ({tag_embeddings.shape[1]}), left child({left_embeddings.shape[1]}) and right child({right_embeddings.shape[1]}) embeddings must match embedding dimension ({self.embedding_dim})"
-        assert left_embeddings.shape[1] == self.embedding_dim, "Left embeddings must match embedding dimension"
-        assert right_embeddings.shape[1] == self.embedding_dim, "Right embeddings must match embedding dimension"
+        assert left_embeddings.shape[1] == right_embeddings.shape[1] == self.embedding_dim, f"left child({left_embeddings.shape[1]}) and right child({right_embeddings.shape[1]}) embeddings must match embedding dimension ({self.embedding_dim})"
         # Concatenate tag, left, and right embeddings
-        combined_embeddings = torch.cat((tag_embeddings, left_embeddings, right_embeddings), dim=-1)
+        if dropout:
+            left_embeddings = F.dropout(left_embeddings, self.dropout_prob, training=True)
+            right_embeddings = F.dropout(right_embeddings, self.dropout_prob, training=True)
+        if self.no_tag:
+            combined_embeddings = torch.cat((left_embeddings, right_embeddings), dim=-1)
+        else:
+            combined_embeddings = torch.cat((tag_embeddings, left_embeddings, right_embeddings), dim=-1)
         # Pass through MLP
         new_embeddings = self.mlp(combined_embeddings)
         return new_embeddings
@@ -351,13 +443,14 @@ class TransformerLayer(nn.Module):
         emb_sequence: Tensor of shape (batch, max_seq_len, embedding_dim)
         mask: Optional mask of shape (batch, max_seq_len) where False indicates padding
         """
-        batch_size = emb_sequence.size(0)
+        batch_size, max_seq_len = emb_sequence.size(0), emb_sequence.size(1)
 
         if mask is None:
-            mask = torch.ones(batch_size, emb_sequence.size(1), dtype=torch.bool, device=emb_sequence.device)
+            mask = torch.ones(batch_size, max_seq_len, dtype=torch.bool, device=emb_sequence.device)
 
         # Embed actions
         x = self.positional_encoding(emb_sequence)  # (batch, seq_len, embedding_dim)
+        #x = emb_sequence
         x = self.embedding_norm(x)
 
         # Add CLS token at position 0
@@ -374,6 +467,69 @@ class TransformerLayer(nn.Module):
         # Extract the CLS token embedding (global representation)
         cls_representation = x[:, 0]  # (batch, embedding_dim)
 
-        encoded_sequence = x[:, 1:]
+        encoded_sequence = x[:, 1:] # (batch, max_seq_len, embedding_dim)
+        if encoded_sequence.shape[1] < max_seq_len:
+            encoded_sequence = F.pad(encoded_sequence, (0, 0, 0, max_seq_len - encoded_sequence.shape[1]), value=0.0)
 
         return cls_representation, encoded_sequence
+    
+
+class ConvEncoderLayer(nn.Module):
+    def __init__(self, embedding_dim, num_layers=4, max_seq_len=60, kernel_size=5, dropout=0.0):
+        super().__init__()
+
+        self.embedding_norm = nn.LayerNorm(embedding_dim)
+        self.positional_encoding = PositionalEncoding(embedding_dim, max_seq_len)
+
+        conv_layers = []
+        for _ in range(num_layers):
+            conv_layers.append(
+                nn.Conv1d(
+                    in_channels=embedding_dim,
+                    out_channels=embedding_dim,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,  # preserve sequence length
+                    groups=1
+                )
+            )
+            conv_layers.append(nn.GroupNorm(1, embedding_dim))
+            conv_layers.append(nn.ReLU())
+            conv_layers.append(nn.Dropout(dropout))
+
+        self.conv_net = nn.Sequential(*conv_layers)
+
+    def forward(self, emb_sequence, mask=None):
+        """
+        emb_sequence: Tensor of shape (batch, max_seq_len, embedding_dim)
+        mask: Optional mask of shape (batch, max_seq_len) where False indicates padding
+        """
+        batch_size, max_seq_len, embedding_dim = emb_sequence.size()
+
+        if mask is None:
+            mask = torch.ones(batch_size, max_seq_len, dtype=torch.bool, device=emb_sequence.device)
+
+        # Ensure emb_sequence has value 0 for padding positions
+        x = emb_sequence * mask[:, :, None]  # Zero out padded positions
+
+        # Positional encoding and normalization
+        #x = self.positional_encoding(emb_sequence)
+        #x = self.embedding_norm(x)
+
+        # Convert to (batch, embedding_dim, seq_len) for Conv1d
+        x = x.transpose(1, 2)
+
+        # Apply convolutional network
+        x = self.conv_net(x)
+
+        # Convert back to (batch, seq_len, embedding_dim)
+        x = x.transpose(1, 2)
+
+        # Zero out padded positions
+        x = x * mask[:, :, None]
+
+        # Extract the CLS token embedding (global representation)
+        sum = x.sum(dim=1)
+        lengths = mask.sum(dim=1, keepdim=True)
+        cls_representation = sum / lengths.clamp(min=1)
+
+        return cls_representation, x

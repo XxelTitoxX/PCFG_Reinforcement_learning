@@ -1,8 +1,10 @@
 import torch
+import torch.nn.functional as F
 from typing import Optional
 from logging import getLogger
 from actor_critic import ActorCritic
 from grammar_env.corpus.sentence import Sentence
+from n_gram import NGram
 import time
 
 logger = getLogger(__name__)
@@ -95,9 +97,9 @@ def overlap_ratio(a: tuple[int, int], b: tuple[int, int]) -> float:
     return overlap / (max(end_a, end_b) - min(start_a, start_b) + 1)
 
 class Environment:
-    def __init__(self, num_episodes, max_num_steps, success_weight:float, device: torch.device, symbol_freq: dict[str, float] = None, supervised: bool = False):
+    def __init__(self, num_episodes, max_num_steps, success_weight:float, device: torch.device, symbol_freq: dict[str, float] = None, n_gram: NGram = None):
         self.symbol_freq = symbol_freq
-        self.supervised = supervised
+        self.n_gram = n_gram
         self.device = device
         self.max_num_steps = max_num_steps
         self.num_episodes = num_episodes
@@ -108,28 +110,32 @@ class Environment:
         self.spans_lists: list[list[tuple[int, int]]] = [[] for _ in range(num_episodes)]
         self.sentence_lengths: torch.Tensor = torch.zeros(num_episodes, dtype=torch.int32, device=device)
 
-        self.positions : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
+        self.action_positions : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
         self.positions_log_probs : torch.Tensor = torch.full((num_episodes, max_num_steps), float('-inf'), dtype=torch.float32, device=device)
-        self.symbols : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
+        self.action_symbols : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
         self.symbols_log_probs : torch.Tensor = torch.full((num_episodes, max_num_steps), float('-inf'), dtype=torch.float32, device=device)
+        self.update_positions : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
+        self.update_symbols : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
         self.rew : torch.Tensor = torch.zeros((num_episodes, max_num_steps), dtype=torch.float32, device=device)
         self.sym_rew : torch.Tensor = torch.zeros((num_episodes, max_num_steps), dtype=torch.float32, device=device)
-        self.rhs_index : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
+        self.state_val: torch.Tensor = torch.zeros((num_episodes, max_num_steps), dtype=torch.float32, device=device)
 
         self.step_count : int = 0
         self.done : torch.Tensor = torch.zeros(num_episodes, dtype=torch.bool, device=device)
         self.ep_len : torch.Tensor = torch.full((num_episodes,), max_num_steps, dtype=torch.int32, device=device)
+        self.cls_tokens: Optional[torch.Tensor] = None
 
-    def reset(self, batch_sentences, batch_s_embeddings: torch.Tensor, batch_spans: list[dict[tuple[int, int], int]]):
+    def reset(self, batch_sentences: list[Sentence], batch_s_embeddings: torch.Tensor):
         # batch_sentences: [num_episodes, sentence_length, embedding dim]
-        max_seq_len = batch_sentences.size(1)
         self.sentences = batch_sentences
         self.state = batch_s_embeddings.to(self.device)
-        self.gt_spans = batch_spans
+        self.cls_tokens = torch.zeros((self.num_episodes, batch_s_embeddings.shape[2]), dtype=torch.float32, device=self.device)
+        self.gt_spans = [s.binary_gt_spans for s in batch_sentences]
         self.sentence_lengths = torch.tensor([len(sentence.symbols) for sentence in batch_sentences], device=self.device, dtype=torch.int32)
+        max_seq_len = self.sentence_lengths.max().item()
 
         self.spans_sentences = torch.full(
-            (self.num_episodes, batch_sentences.size(1), 2),
+            (self.num_episodes, max_seq_len, 2),
             -1,
             dtype=torch.int32,
             device=self.device
@@ -143,12 +149,15 @@ class Environment:
 
         self.spans_lists = [[] for _ in range(self.num_episodes)]
 
-        self.positions.fill_(-1)
+        self.action_positions.fill_(-1)
         self.positions_log_probs.fill_(float('-inf'))
-        self.symbols.fill_(-1)
+        self.action_symbols.fill_(-1)
         self.symbols_log_probs.fill_(float('-inf'))
+        self.update_positions.fill_(-1)
+        self.update_symbols.fill_(-1)
         self.rew.zero_()
         self.sym_rew.zero_()
+        self.state_val.zero_()
         self.step_count = 0
         self.done.zero_()
         self.ep_len.fill_(self.max_num_steps)
@@ -159,21 +168,25 @@ class Environment:
         return self.step_count >= self.max_num_steps - 1 or self.done.all()
 
     def check_done(self):
-        curr_state = self.state[:, self.step_count, :]
-        mask = (curr_state[:, 1:] == -1).all(dim=1) # & (curr_state[:, 0] == 0) # Here done does not mean successfulß
-        self.done = mask.to(self.device)
-        self.ep_len[mask] = torch.minimum(self.ep_len[mask], torch.tensor(self.step_count, device=self.device))
+        done = (self.spans_sentences[:, 1:, 0] == -1).all(dim=1)
+        assert (~done & self.done).sum() == 0, f"Some episodes marked as done but do not qulify as such"
+        self.done = done
+        self.ep_len[done] = torch.minimum(self.ep_len[done], torch.tensor(self.step_count, device=self.device))
 
-    def step(self, positions: torch.Tensor, positions_log_probs: torch.Tensor, symbols: torch.Tensor, symbols_log_probs: torch.Tensor, new_constituents: torch.Tensor):
+    def step(self, action_positions: torch.Tensor, positions_log_probs: torch.Tensor, action_symbols: torch.Tensor, symbols_log_probs: torch.Tensor, update_positions: torch.Tensor, update_symbols: torch.Tensor, state_value: torch.Tensor, args: dict = None):
+        new_constituents, drp_new_constituents = args["new_constituent"], args["drp_new_constituent"]
+
         not_done = ~self.done
         not_done_idx = torch.arange(self.num_episodes, device=self.device)[not_done]
-        assert positions.shape == positions_log_probs.shape == symbols.shape == symbols_log_probs.shape == (not_done.sum().item(),), f"Shape mismatch: {positions.shape}, {positions_log_probs.shape}, {symbols.shape}, {symbols_log_probs.shape}, {(not_done.sum().item(),)}"
+        not_done_range = torch.arange(not_done.sum().item(), device=self.device)
+        assert action_positions.shape == positions_log_probs.shape == action_symbols.shape == symbols_log_probs.shape == (not_done.sum().item(),), f"Shape mismatch: {action_positions.shape}, {positions_log_probs.shape}, {action_symbols.shape}, {symbols_log_probs.shape}, {(not_done.sum().item(),)}"
 
         current_state = self.state[not_done]
         current_spans = self.spans_sentences[not_done]
+        current_mask = self.get_mask()[not_done]
 
-        next_sentence = fuse_and_shift(current_state, positions, new_constituents, -1)
-        next_spans, new_spans = fuse_spans_and_shift(current_spans, positions, -1)
+        next_sentence = fuse_and_shift(current_state, update_positions, new_constituents, 0.)
+        next_spans, new_spans = fuse_spans_and_shift(current_spans, update_positions, -1)
 
         self.state[not_done] = next_sentence
         self.spans_sentences[not_done] = next_spans
@@ -181,23 +194,48 @@ class Environment:
         for i in range(len(new_spans)):
             self.spans_lists[not_done_idx[i]].append((new_spans[i, 0].item(), new_spans[i, 1].item()))
 
-        self.positions[not_done, self.step_count] = positions
+        self.action_positions[not_done, self.step_count] = action_positions
         self.positions_log_probs[not_done, self.step_count] = positions_log_probs
-        self.symbols[not_done, self.step_count] = symbols
+        self.action_symbols[not_done, self.step_count] = action_symbols
         self.symbols_log_probs[not_done, self.step_count] = symbols_log_probs
+        self.update_positions[not_done, self.step_count] = update_positions
+        self.update_symbols[not_done, self.step_count] = update_symbols
+        self.state_val[not_done, self.step_count] = state_value
 
+
+        action_spans = torch.stack((current_spans[not_done_range, action_positions, 0], current_spans[not_done_range, action_positions + 1, 1]), dim=1)
+        self.rew[not_done, self.step_count] = self.supervised_spans_reward(not_done, action_spans)
+        #self.rew[not_done, self.step_count] = self.contrastive_loss_vec(current_state, action_positions, current_mask)
+        #self.rew[not_done, self.step_count] = self.overlap_sym_reward(not_done, new_spans, action_symbols)
+        #self.rew[not_done, self.step_count] = self.n_gram_reward(not_done, current_spans[not_done_range, action_positions], current_spans[not_done_range, action_positions + 1])
         
-        self.rew[not_done, self.step_count], self.sym_rew[not_done, self.step_count] = self.supervised_spans_reward(not_done, new_spans, symbols)
+        #self.sym_rew[not_done, self.step_count] = self.supervised_sym_reward(not_done, new_spans, action_symbols)
+        self.sym_rew[not_done, self.step_count] = self.overlap_sym_reward(not_done, new_spans, action_symbols)
+        #self.sym_rew[not_done, self.step_count] = (F.cosine_similarity(drp_new_constituents, new_constituents, dim=1)+1)/2
 
-        #logger.info(f"Position reward: {self.rew[0, self.step_count].item()}, Symbol reward: {self.sym_rew[0, self.step_count].item()}")
+        #self.rew[not_done, self.step_count] = 0.5 * (self.rew[not_done, self.step_count] + self.sym_rew[not_done, self.step_count])
+        '''
+        if self.step_count > 0:
+            cls_cossim = self.reward_cossim_cls(not_done, cls_token)
+            #self.rew[not_done, self.step_count-1] = cls_cossim
+            self.sym_rew[not_done, self.step_count-1] = cls_cossim
+        '''
+        #self.cls_tokens[not_done] = cls_token
+
 
         self.step_count += 1
         self.check_done()
 
     def get_state(self):
         not_done = ~self.done
-        current_state, _ = min_padding(self.state[not_done])
+        current_state = self.state[not_done]
         return current_state, not_done
+    
+    def get_mask(self) -> torch.Tensor:
+        """
+        Get the mask for the valid symbols/padding in each sentence.
+        """
+        return self.spans_sentences[:, :, 0] != -1
 
     def get_rewards(self):
         return self.rew[:, :self.step_count].clone()
@@ -218,24 +256,142 @@ class Environment:
                 batch_sym_rtgs[i, t] = self.sym_rew[i, t] + gamma * batch_sym_rtgs[i, t + 1]
         return batch_rtgs, batch_sym_rtgs
     
-    def supervised_spans_reward(self, not_done: torch.Tensor, new_spans: torch.Tensor, new_symbols: torch.Tensor):
+    def supervised_spans_reward(self, not_done: torch.Tensor, new_spans: torch.Tensor):
         """
         Compute the reward for the new spans based on the ground truth spans.
         """
         gt_spans = [span for span, nd in zip(self.gt_spans, not_done) if nd]
         span_reward = torch.zeros(len(new_spans), dtype=torch.float32, device=self.device)
-        sym_reward = torch.zeros(len(new_spans), dtype=torch.float32, device=self.device)
 
         for i in range(len(new_spans)):
             sym = gt_spans[i].get((new_spans[i,0].item(), new_spans[i,1].item()), None)
             span_reward[i] = sym is not None
+
+        return span_reward
+
+    def overlap_sym_reward(self, not_done: torch.Tensor, new_spans: torch.Tensor, new_symbols: torch.Tensor):
+        """
+        Compute the reward for the chosen symbol assuming symbol actor was given "new_spans" as input.
+        Reward is given by highest overlap ratio with any GT span with the same symbol.
+        """
+        gt_spans = [span for span, nd in zip(self.gt_spans, not_done) if nd]
+        sym_reward = torch.zeros(len(new_spans), dtype=torch.float32, device=self.device)
+
+        for i in range(len(new_spans)):
             spans_with_pred_sym = [span for span, symm in gt_spans[i].items() if symm == new_symbols[i].item()]
             if len(spans_with_pred_sym) > 0:
                 sym_reward[i] = max([overlap_ratio((new_spans[i,0].item(), new_spans[i,1].item()), span) for span in spans_with_pred_sym]) if self.symbol_freq is None else max([overlap_ratio((new_spans[i,0].item(), new_spans[i,1].item()), span) for span in spans_with_pred_sym])*(1.0-self.symbol_freq[IDX_TO_NT_TAG[new_symbols[i].item()]])
             else:
                 sym_reward[i] = 0
 
-        return span_reward, sym_reward
+        return sym_reward
+    
+    def supervised_sym_reward(self, not_done: torch.Tensor, new_spans: torch.Tensor, new_symbols: torch.Tensor):
+        """
+        Compute the reward for the chosen symbols assuming symbol actor was given "new_spans" as input and that new_spans is in the GT spans.
+        """
+        gt_spans = [span for span, nd in zip(self.gt_spans, not_done) if nd]
+        sym_reward = torch.zeros(len(new_spans), dtype=torch.float32, device=self.device)
+
+        for i in range(len(new_spans)):
+            sym = gt_spans[i].get((new_spans[i,0].item(), new_spans[i,1].item()), None)
+            sym_reward[i] = float(sym == new_symbols[i].item())
+
+        return sym_reward
+
+    def supervised_update_sym(self, not_done: torch.Tensor, new_spans: torch.Tensor):
+        """
+        Determines the most appropriate symbol for given span based in the "closest" ground truth span (shortest covering span).
+        """
+        gt_spans = [span for span, nd in zip(self.gt_spans, not_done) if nd]
+        symbols = torch.zeros(len(new_spans), dtype=torch.int32, device=self.device)
+
+        for i in range(len(new_spans)):
+            new_span = (new_spans[i,0].item(), new_spans[i,1].item())
+            shortest_covering_span = min([span for span in gt_spans[i].keys() if span[0] <= new_span[0] and span[1] >= new_span[1]], key=lambda x: x[1]-x[0], default=None)
+            assert shortest_covering_span is not None, f"Shortest covering span not found for {new_span} in {gt_spans[i]}"
+            symbols[i] = gt_spans[i][shortest_covering_span]
+
+        return symbols
+    
+    def reward_cossim_cls(self, not_done: torch.Tensor, cls_token: torch.Tensor):
+        """
+        Compute the reward for the new constituents based on the similarity between CLS tokens before and after update.
+        """
+        return (F.cosine_similarity(cls_token, self.cls_tokens[not_done], dim=1)+1)/2
+    
+    def contrastive_loss(self, state: torch.Tensor, positions: torch.Tensor, mask: torch.Tensor):
+        margin = 0.5
+        losses = torch.zeros(state.shape[0], dtype=torch.float32, device=self.device)
+        for i, (sen, pos, m) in enumerate(zip(state, positions, mask)):
+            valid_sen = sen[m]
+            pair_dist = torch.cdist(valid_sen, valid_sen, p=2)  # Compute pairwise distances
+            labels = torch.zeros_like(pair_dist, dtype=torch.bool, device=self.device)
+            labels.fill_diagonal_(True)  # Set diagonal to True (same token pairs)
+            labels[pos, pos+1] = True  # Set the position pair to True (fused token pair)
+            labels[pos+1, pos] = True  # Set the position pair to True (fused token pair)
+            similar_pair_loss = (pair_dist[labels]**2).mean()
+            dissimilar_pair_loss = (torch.clamp(margin - pair_dist[~labels], min=0)**2).mean() if torch.any(~labels) else 0.0
+            loss = 0.5* (similar_pair_loss + dissimilar_pair_loss)
+            losses[i] = loss
+        assert not torch.isnan(losses).any(), f"NaN found in losses: {losses}"
+        return torch.exp(-losses)
+    
+    def contrastive_loss_vec(self, state: torch.Tensor, positions: torch.Tensor, mask: torch.Tensor):
+        """
+        Compute the contrastive loss for a batch of states.
+        """
+        margin = 0.5
+        batch_size, seq_len, dim = state.shape
+
+        # Mask invalid positions
+        all_valid_pairs = mask[:, None, :] & mask[:, :, None]  # (B, N, N)
+        
+        # Compute pairwise distances per batch (B, N, N)
+        pair_dists = torch.cdist(state, state, p=2)
+        
+        # Build label masks (B, N, N)
+        diag_mask = torch.eye(seq_len, device=state.device, dtype=torch.bool).unsqueeze(0).expand(batch_size, -1, -1)
+        pos_mask = torch.zeros_like(diag_mask)
+        pos_mask[torch.arange(batch_size), positions, positions+1] = True
+        pos_mask[torch.arange(batch_size), positions+1, positions] = True
+
+        labels = diag_mask | pos_mask
+
+        # Similar pairs
+        valid_and_similar = labels & all_valid_pairs
+        sq_dists = (pair_dists**2).masked_fill(~valid_and_similar, 0.0)  # Set dissimilar pairs or invalid pairs to zero distance
+        count = valid_and_similar.sum(dim=(1, 2))  # Count similar pairs per batch
+        similar_loss = sq_dists.sum(dim=(1, 2)) / count.clamp(min=1)  # Avoid division by zero
+
+        # Dissimilar pairs
+        valid_and_dissimilar = ~labels & all_valid_pairs
+        sq_dists = (torch.clamp(margin - pair_dists, min=0)**2).masked_fill(~valid_and_dissimilar, 0.0)  # Set similar pairs or invalid pairs to zero distance
+        count = (valid_and_dissimilar).sum(dim=(1, 2))  # Count dissimilar pairs per batch
+        dissimilar_loss = sq_dists.sum(dim=(1, 2)) / count.clamp(min=1)  # Avoid division by zero
+
+        total_loss = 0.5 * (similar_loss + dissimilar_loss)
+
+        return torch.exp(-total_loss)
+
+    def n_gram_reward(self, not_done: torch.Tensor, left_spans: torch.Tensor, right_spans: torch.Tensor):
+        """
+        Compute the n-gram reward for the new spans based on the n-gram model.
+        """
+        num_sentences = left_spans.shape[0]
+        rewards = torch.zeros(num_sentences, dtype=torch.float32, device=self.device)
+        if self.n_gram is None:
+            return rewards
+        sentences = [s for s, nd in zip(self.sentences, not_done) if nd]
+
+        def left_right_prob(idx : int):
+            left_ngram = sentences[idx].pos_tags[left_spans[idx, 0].item():left_spans[idx, 1].item() + 1]
+            right_ngram = sentences[idx].pos_tags[right_spans[idx, 0].item():right_spans[idx, 1].item() + 1]
+            return self.n_gram.compute_prob(tuple(left_ngram), tuple(right_ngram))
+        for i in range(num_sentences):
+            rewards[i] = left_right_prob(i)
+        return rewards
+
     
     def supervised_spans_reward_v2(self, not_done: torch.Tensor, pred_new_spans:torch.Tensor, gt_new_spans: torch.Tensor, new_symbols: torch.Tensor):
         """
@@ -293,39 +449,39 @@ class Environment:
     
     def collect_data_batch(self, gamma: float):
         self.check_done()
-        batch_states = []
+        batch_state_val = []
         batch_positions = []
         batch_positions_log_probs = []
         batch_rewards = []
         batch_symbols = []
         batch_symbols_log_probs = []
         batch_sym_rewards = []
-        mask_position = []
-        mask_symbol = []
+        mask_before = []
+        mask_after = []
         rews_to_go, sym_rews_to_go = self.compute_rtgs(gamma)
         for i in range(self.num_episodes):
-            batch_states += self.state[i, :self.ep_len[i], :].tolist()
-            batch_positions += self.positions[i, :self.ep_len[i]].tolist()
+            batch_state_val += self.state_val[i, :self.ep_len[i]+1].tolist()
+            batch_positions += self.action_positions[i, :self.ep_len[i]].tolist()
             batch_positions_log_probs += self.positions_log_probs[i, :self.ep_len[i]].tolist()
             batch_rewards += (rews_to_go[i, :self.ep_len[i]]).tolist()
-            batch_symbols += self.symbols[i, :self.ep_len[i]].tolist()
+            batch_symbols += self.action_symbols[i, :self.ep_len[i]].tolist()
             batch_symbols_log_probs += self.symbols_log_probs[i, :self.ep_len[i]].tolist()
-            batch_sym_rewards += (sym_rews_to_go[i, :self.ep_len[i]]).tolist()
-            #mask_position += [1] * self.ep_len[i] + [0]
-            #mask_symbol += [0] + [1] * self.ep_len[i]
-        return torch.tensor(batch_states, dtype=torch.int32, device=self.device), \
-               torch.tensor(batch_rewards, dtype=torch.float32, device=self.device), \
+            batch_sym_rewards += (sym_rews_to_go[i, 0:self.ep_len[i]+0]).tolist()
+            mask_before += [1] * self.ep_len[i] + [0]
+            mask_after += [0] + [1] * self.ep_len[i]
+        return torch.tensor(batch_state_val, dtype=torch.float32, device=self.device), \
                 torch.tensor(batch_positions, dtype=torch.int32, device=self.device), \
                 torch.tensor(batch_positions_log_probs, dtype=torch.float32, device=self.device), \
+                torch.tensor(batch_rewards, dtype=torch.float32, device=self.device), \
                 torch.tensor(batch_symbols, dtype=torch.int32, device=self.device), \
                 torch.tensor(batch_symbols_log_probs, dtype=torch.float32, device=self.device), \
                 torch.tensor(batch_sym_rewards, dtype=torch.float32, device=self.device), \
                 rews_to_go, \
-                #torch.tensor(mask_position, dtype=torch.bool, device=self.device), \
-                #torch.tensor(mask_symbol, dtype=torch.bool, device=self.device), \
+                torch.tensor(mask_before, dtype=torch.bool, device=self.device), \
+                torch.tensor(mask_after, dtype=torch.bool, device=self.device), \
     
 
-    def rollout(self, actor_critic: ActorCritic, batch_sentences: list[Sentence], batch_spans: list[dict[tuple[int, int]]], evaluate: bool = False):
+    def rollout(self, actor_critic: ActorCritic, batch_sentences: list[Sentence], evaluate: bool = False, supervised_update:bool = False):
         """
         Collect batch of data from simulation.
         As PPO is an on-policy algorithm, we need to collect a fresh batch
@@ -338,51 +494,114 @@ class Environment:
         """
         time_s = time.time()
 
-        assert batch_sentences.shape[0] == len(batch_spans) == self.num_episodes, f"Data batch size {batch_sentences.shape[0]} does not match num_episodes {self.num_episodes}"
+        assert len(batch_sentences) == self.num_episodes, f"Data batch size {len(batch_sentences)} does not match num_episodes {self.num_episodes}"
 
         actor_critic.eval()
 
         batch_s_embeddings = actor_critic.encode_sentence(batch_sentences)
 
         # Reset the environment.
-        self.reset(batch_sentences, batch_s_embeddings, batch_spans)
+        self.reset(batch_sentences, batch_s_embeddings)
+
+        cls_tokens = actor_critic.get_cls_token(self.state, self.get_mask())
+        self.cls_tokens = cls_tokens
 
         # Run an episode for max_timesteps_per_episode timesteps
         ep_t: int = 0
         for ep_t in range(self.max_num_steps):
-
+            if supervised_update:
+                gt_pos, gt_sym, gt_new_spans = self.gt_pos_sym_span() # Supervised span and symbol
+            else:
+                gt_pos, gt_sym, gt_new_spans = None, None, None
             current_states, not_done = self.get_state()
-            position, position_log_prob, symbol, symbol_log_prob, _ = actor_critic.act(current_states, max_prob=evaluate)
-            assert position.shape == position_log_prob.shape == symbol.shape == symbol_log_prob.shape == (not_done.sum().item(),), f"Shape mismatch: {position.shape}, {position_log_prob.shape}, {symbol.shape}, {symbol_log_prob.shape}, {(not_done.sum().item(),)}"
+            position, position_log_prob, symbol, symbol_log_prob, state_value = actor_critic.act(current_states, self.get_mask()[not_done], max_prob=evaluate, gt_positions=gt_pos)
+            #cls_token = actor_critic.get_cls_token(current_states, self.get_mask()[not_done])
+            assert position.shape == position_log_prob.shape == symbol.shape == symbol_log_prob.shape == state_value.shape == (not_done.sum().item(),), f"Shape mismatch: {position.shape}, {position_log_prob.shape}, {symbol.shape}, {symbol_log_prob.shape}, {state_value.shape}, {(not_done.sum().item(),)}"
 
-            self.step(position, position_log_prob, symbol, symbol_log_prob)
+            current_spans_sentences = self.spans_sentences[not_done]
+            action_spans = torch.stack([current_spans_sentences[torch.arange(not_done.sum().item()), position, 0], current_spans_sentences[torch.arange(not_done.sum().item()), position + 1, 1]], dim=1)
+            #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, self.supervised_update_sym(not_done, action_spans))
+            #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, torch.zeros_like(symbol, dtype=torch.int32, device=self.device))
+            #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (gt_pos, symbol)
+            update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, symbol)
+
+            # Compute new constituents embeddings
+            left = current_states[torch.arange(not_done.sum().item()), update_position, :]
+            right = current_states[torch.arange(not_done.sum().item()), update_position + 1, :]
+            emb_sym = actor_critic.tag_embedder(update_symbol)
+            new_constituent = actor_critic.fuse_constituents(emb_sym, left, right)
+            # Constituent embedding with dropout for additional objective
+            drp_new_constituent = actor_critic.fuse_constituents(emb_sym, left, right, dropout=True)
+            #new_constituent = new_constituent if evaluate else drp_new_constituent
+
+            args = {"new_constituent": new_constituent, "drp_new_constituent": drp_new_constituent}
+            self.step(position, position_log_prob, symbol, symbol_log_prob, update_position, update_symbol, state_value, args=args)
+
 
             if self.stop():
                 break
         
+
+        #last_cls_token = actor_critic.get_cls_token(self.state, self.get_mask())
+        #self.rew[torch.arange(self.num_episodes, device=self.device), self.ep_len-1] = self.reward_cossim_cls(torch.ones((self.num_episodes,), dtype=torch.bool, device=self.device), last_cls_token)
+        #self.sym_rew[torch.arange(self.num_episodes, device=self.device), self.ep_len-1] = self.reward_cossim_cls(torch.ones((self.num_episodes,), dtype=torch.bool, device=self.device), last_cls_token)
+
+        
         logger.info(f"Rollout done. {self.num_episodes} episodes ran in {time.time() - time_s: .2f} secs")
 
-    def replay(self, actor_critic: ActorCritic):
+    def replay(self, actor_critic: ActorCritic, b_add_obj:bool = False):
         """
         Replay the preceding simulation, in order to collect current log probabilities and state values for PPO loss.
 
         :param actor_critic: ActorCritic model to use for the replay.
         """
         actor_critic.train()
-        self.reset(self.state[:, 0, :], self.sentence_lengths, self.gt_spans)
+        batch_s_embeddings = actor_critic.encode_sentence(self.sentences)
+        self.state = batch_s_embeddings.to(self.device)
+        max_seq_len = self.sentence_lengths.max().item()
+        mask = torch.arange(max_seq_len, device=self.device)[None, :] < self.sentence_lengths[:, None]
 
+
+        curr_pos_log_probs = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
+        curr_sym_log_probs = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
+        curr_pos_entropies = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
+        curr_sym_entropies = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
+        curr_values = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
+        add_obj = torch.tensor([0.0], device=self.device) # Additional objective for the PPO loss, e.g. contrastive loss
+        nb_terms = 0
         # Run an episode for max_timesteps_per_episode timesteps
         ep_t: int = 0
-        for ep_t in range(self.max_num_steps):
+        for ep_t in range(self.ep_len.max()):
 
-            current_states, not_done = self.get_state()
-            position, position_log_prob, symbol, symbol_log_prob, _ = actor_critic.act(current_states, max_prob=True)
-            left = current_states[torch.arange(not_done.sum().item()), position, :]
-            right = current_states[torch.arange(not_done.sum().item()), position + 1, :]
-            new_constituent = actor_critic.fuse_constituents(symbol, left, right)
-            assert position.shape == position_log_prob.shape == symbol.shape == symbol_log_prob.shape == (not_done.sum().item(),), f"Shape mismatch: {position.shape}, {position_log_prob.shape}, {symbol.shape}, {symbol_log_prob.shape}, {(not_done.sum().item(),)}"
+            not_done = torch.full((self.num_episodes,), ep_t, dtype=torch.int32, device=self.device) < self.ep_len
 
-            self.step(position, position_log_prob, symbol, symbol_log_prob, new_constituent)
+            current_states = self.state[not_done]
+            current_act_pos = self.action_positions[not_done, ep_t]
+            current_act_sym = self.action_symbols[not_done, ep_t]
+            current_upd_pos = self.update_positions[not_done, ep_t]
+            current_upd_sym = self.update_symbols[not_done, ep_t]
+            pos_log_prob, pos_ent, sym_log_prob, sym_ent, state_value = actor_critic.evaluate(current_states, mask[not_done], current_act_pos, current_act_sym, gt_positions=current_upd_pos)
+            curr_pos_log_probs[not_done, ep_t] , curr_sym_log_probs[not_done, ep_t], curr_pos_entropies[not_done, ep_t], curr_sym_entropies[not_done, ep_t], curr_values[not_done, ep_t] = pos_log_prob, sym_log_prob, pos_ent, sym_ent, state_value
 
-            if self.stop():
-                break
+            # Update state with the new constituents
+            left = current_states[torch.arange(not_done.sum().item()), current_upd_pos, :]
+            right = current_states[torch.arange(not_done.sum().item()), current_upd_pos + 1, :]
+            emb_sym = actor_critic.tag_embedder(current_upd_sym)
+            new_constituent = actor_critic.fuse_constituents(emb_sym, left, right)
+
+            if b_add_obj:
+                drp_new_constituent = actor_critic.fuse_constituents(emb_sym, left, right, dropout=True)
+                add_obj += self.contrastive_loss(current_states, current_act_pos, mask[not_done]).sum()
+                nb_terms += not_done.sum().item()
+                add_obj += ((F.cosine_similarity(drp_new_constituent, new_constituent, dim=1)+1)/2).sum()
+                nb_terms += not_done.sum().item()
+            self.state[not_done] = fuse_and_shift(current_states, current_upd_pos, new_constituent, 0.)
+
+            lens = mask.sum(dim=1)
+            mask[torch.arange(self.num_episodes, device=self.device), lens-1] = False
+
+        # Prepare the data for the PPO loss
+        add_obj = add_obj / (nb_terms+1)
+        mask = torch.arange(max_seq_len-1, device=self.device)[None, :] < self.ep_len[:, None]
+        return curr_pos_log_probs[mask], curr_pos_entropies[mask], curr_sym_log_probs[mask], curr_sym_entropies[mask], curr_values[mask], add_obj
+

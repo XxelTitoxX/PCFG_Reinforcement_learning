@@ -81,6 +81,24 @@ POS_CLUSTER_TO_IDX: dict[str, int] = {
             "ETC": 13
         }
 
+NT_TAG_TO_IDX = {
+    'X': 0, 'ADJP': 1, 'ADVP': 2, 'CONJP': 3, 'FRAG': 4, 'INTJ': 5, 'LST': 6, 'NAC': 7, 'NP': 8,
+    'NX': 9, 'PP': 10, 'PRN': 11, 'PRT': 12, 'QP': 13, 'RRC': 14, 'S': 15, 'SBAR': 16, 'SBARQ': 17,
+    'SINV': 18, 'SQ': 19, 'UCP': 20, 'VP': 21, 'WHADJP': 22, 'WHADVP': 23, 'WHNP': 24, 'WHPP': 25
+}
+
+def remove_after_dash(s:str) -> str:
+    """
+    Removes everything after the first '-' or '=' or '|' character in a string, including the character itself.
+    
+    Parameters:
+        s (str): The input string.
+    
+    Returns:
+        str: The truncated string.
+    """
+    return re.split('[-=|]', s, 1)[0]
+
 @dataclass_json
 @dataclass(frozen=True)
 @total_ordering
@@ -171,8 +189,15 @@ class Sentence:
     tree_sr_spans: list[GoldSpan] = field(init=False)
     """
     List of spans in tree_sr.
-    e.g., [(0, 2), (1, 2)]
+    e.g., [GoldSpan(gt_tag, 0, 2), GoldSpan(deduced_gt_tag, 1, 2)]
     
+    This is used to calculate the oracle f1 score.
+    """
+    binary_gt_spans: dict[tuple[int, int], int] = field(init=False)
+    """
+    Dictionary of ground truth spans from binarised tree.
+    Keys are tuples of (start, end) and values are the indexed ground truth tags.
+    e.g., {(0, 2): 'S'=8, (1, 2): 'VP'=12}
     This is used to calculate the oracle f1 score.
     """
     pos_tags: list[int] = field(init=False)
@@ -209,6 +234,7 @@ class Sentence:
         self.gold_spans: list[GoldSpan] = []
         self.tree_sr: list[str] = []
         self.tree_sr_spans: list[tuple[int, int]] = []
+        self.binary_gt_spans: dict[tuple[int, int], int] = {}
 
         pointer: int = 0
         stack: list[tuple[int, int] | NT] = []
@@ -266,6 +292,7 @@ class Sentence:
                     for left in intermediate_left:
                         self.tree_sr_spans.append(GoldSpan(nt.tag, left, span[1]))
                         self.tree_sr.append('R')
+                        self.binary_gt_spans[(left, span[1])] = NT_TAG_TO_IDX[remove_after_dash(nt.tag)]
 
         assert len(stack) == 1 and isinstance(stack[0], tuple), f"Stack: {stack}"
         assert pointer == len(self.symbols), f"Pointer: {pointer}, Symbols: {self.symbols}"

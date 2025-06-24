@@ -6,6 +6,7 @@ from typing import Any
 
 from device import get_device
 from grammar_env.corpus.corpus import Corpus
+from n_gram import NGram
 from ppo import PPO, PPOConfig
 from writer import Writer
 
@@ -23,15 +24,25 @@ def train(name: str, persistent_dir: Path, args: argparse.Namespace, ppo_config:
         str(args.directory / "ptb-train.txt"), max_vocab_size=args.max_vocab_size, max_len=args.max_len, max_sentence_length=60
     )
     valid_corpus: Corpus = Corpus(str(args.directory / "ptb-valid.txt"))
+    train_corpus._initialize_symbol_idx()
     # train and valid corpus must use the same symbol_to_idx and idx_to_symbol for the correct results
     valid_corpus.symbol_to_idx = train_corpus.symbol_to_idx
     valid_corpus.idx_to_symbol = train_corpus.idx_to_symbol
+    valid_corpus.vocab_size = train_corpus.vocab_size
+    train_corpus._apply_symbol_idx()
+    valid_corpus._apply_symbol_idx()
+
+    n_gram: NGram = NGram(
+        n=4, padding_idx=-1
+    )
+    #n_gram.import_from_pkl(str(args.directory / "four_gram.pkl"))
 
     writer: Writer = Writer(name, vars(ppo_config), args.use_wandb)
     ppo: PPO = PPO(
         train_corpus, valid_corpus, persistent_dir,
         writer, get_device(args.device),
-        ppo_config
+        ppo_config,
+        n_gram=n_gram,
     )
     ppo.learn(args.timesteps)
 
@@ -69,6 +80,7 @@ if __name__ == '__main__':
     parser.add_argument("--n_head", type=int)
     parser.add_argument("--gradient_clip", type=float)
     parser.add_argument("--pure_reinforce", action='store_true')
+    parser.add_argument("--name", type=str, default="")
 
     args: argparse.Namespace = parser.parse_args()
 
@@ -78,7 +90,7 @@ if __name__ == '__main__':
     }
     ppo_config: PPOConfig = PPOConfig(**hyperparameters)
 
-    name: str = f"{ppo_config.num_non_terminals}_{ppo_config.num_sentences_per_batch}_{datetime_tag()}_{'REINFORCE' if ppo_config.pure_reinforce else 'PPO'}"
+    name: str = f"{args.name}_{ppo_config.num_non_terminals}_{ppo_config.num_sentences_per_batch}_{datetime_tag()}_{'REINFORCE' if ppo_config.pure_reinforce else 'PPO'}"
     persistent_dir: Path = Path("log") / name
     persistent_dir.mkdir(parents=True, exist_ok=False)
 

@@ -54,31 +54,31 @@ class ResultSaver:
         self.valid_probability_criterion: Criterion = ProbabilityCriterion(device)
         self.valid_coverage_criterion: Criterion = CoverageCriterion(device)
 
-        self.train_env: Environment = Environment(num_sentences_per_score, max_num_steps, 0.0, device)
+        self.train_env: Environment = Environment(min(num_sentences_per_score, len(train_corpus)), max_num_steps, 0.0, device)
         self.valid_env: Environment = Environment(num_sentences_per_score, max_num_steps, 0.0, device)
 
     def save(
-            self, name: str, i_so_far: int, actor_critic: ActorCritic, pos_tags_to_sym,
+            self, name: str, i_so_far: int, actor_critic: ActorCritic,
             commit: bool
     ):
         with torch.no_grad():
             try:
-                train_sentences, train_spans = next(self.train_iterator)
+                train_sentences = next(self.train_iterator)
 
-                if train_sentences.shape[0] != self.num_sentences_per_score:
+                if len(train_sentences) != self.num_sentences_per_score:
                     raise StopIteration
             except StopIteration:
                 self.train_iterator = iter(self.train_dataloader)
-                train_sentences, train_spans = next(self.train_iterator)
+                train_sentences = next(self.train_iterator)
             try:
-                valid_sentences, valid_spans = next(self.valid_iterator)
-                if valid_sentences.shape[0] != self.num_sentences_per_score:
+                valid_sentences = next(self.valid_iterator)
+                if len(valid_sentences) != self.num_sentences_per_score:
                     raise StopIteration
             except StopIteration:
                 self.valid_iterator = iter(self.valid_dataloader)
-                valid_sentences, valid_spans = next(self.valid_iterator)
-            self.train_env.rollout(actor_critic, pos_tags_to_sym(train_sentences), train_spans, evaluate=True)
-            self.valid_env.rollout(actor_critic, pos_tags_to_sym(valid_sentences), valid_spans, evaluate=True)
+                valid_sentences = next(self.valid_iterator)
+            self.train_env.rollout(actor_critic, train_sentences, evaluate=True)
+            self.valid_env.rollout(actor_critic, valid_sentences, evaluate=True)
             train_f1: float = torch.mean(self.train_f1_criterion.score_sentences(self.train_env)).item()
             valid_f1: float = torch.mean(self.valid_f1_criterion.score_sentences(self.valid_env)).item()
 

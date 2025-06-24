@@ -17,11 +17,6 @@ __all__ = ['Corpus']
 logger = getLogger(__name__)
 
 NON_TERMINAL_TAGS = ['X', 'ADJP', 'ADVP', 'CONJP', 'FRAG', 'INTJ', 'LST', 'NAC', 'NP', 'NX', 'PP', 'PRN', 'PRT', 'QP', 'RRC', 'S', 'SBAR', 'SBARQ', 'SINV', 'SQ', 'UCP', 'VP', 'WHADJP', 'WHADVP', 'WHNP', 'WHPP']
-NT_TAG_TO_IDX = {
-    'X': 0, 'ADJP': 1, 'ADVP': 2, 'CONJP': 3, 'FRAG': 4, 'INTJ': 5, 'LST': 6, 'NAC': 7, 'NP': 8,
-    'NX': 9, 'PP': 10, 'PRN': 11, 'PRT': 12, 'QP': 13, 'RRC': 14, 'S': 15, 'SBAR': 16, 'SBARQ': 17,
-    'SINV': 18, 'SQ': 19, 'UCP': 20, 'VP': 21, 'WHADJP': 22, 'WHADVP': 23, 'WHNP': 24, 'WHPP': 25
-}
 
 def remove_after_dash(s:str) -> str:
     """
@@ -38,13 +33,11 @@ def remove_after_dash(s:str) -> str:
 class SentenceDataset(Dataset):
     def __init__(self, sentences: list[Sentence]):
         self.raw_sentences : list[Sentence] = sentences
-        self.pos_tags : list[list[int]] = [sentence.pos_tags for sentence in sentences]
-        self.gold_spans : list[dict[tuple[int, int], int]] = [{s.start_end() : NT_TAG_TO_IDX[remove_after_dash(s.tag)] for s in sentence.tree_sr_spans} for sentence in sentences]
     def __len__(self):
         return len(self.raw_sentences)
 
     def __getitem__(self, idx):
-        return self.pos_tags[idx], self.gold_spans[idx]
+        return self.raw_sentences[idx]
     
 def collate_fn(batch):
     data, spans = zip(*batch)  # Unzip into data and indices
@@ -59,6 +52,12 @@ def collate_fn(batch):
 
     return torch.tensor(padded_batch), spans
 
+def list_collate_fn(batch):
+    """
+    Custom collate function to handle lists of varying lengths.
+    """
+    return list(batch)
+
 
 
 
@@ -69,6 +68,7 @@ class Corpus:
     min_sentence_length: Optional[int] = 1
     max_sentence_length: Optional[int] = 60
     max_vocab_size: Optional[int] = None
+    vocab_size: int = field(init=False)
     max_len: Optional[int] = 40000
 
     sentences: list[Sentence] = field(init=False)
@@ -80,8 +80,6 @@ class Corpus:
 
     def __post_init__(self):
         self._initialize_sentences()
-        self._initialize_symbol_idx()
-        self._apply_symbol_idx()
         logger.info(
             f"Read corpus of length {len(self)} from {self.ptb_path}, "
             f"min_sentence_length={self.min_sentence_length}, "
@@ -130,7 +128,7 @@ class Corpus:
         """
 
         if self.max_vocab_size is not None:
-            symbol_count = self.symbol_count[:self.max_vocab_size]
+            symbol_count = self.symbol_count[:self.max_vocab_size-3]  # We take into account the first three special symbols
         else:
             symbol_count = self.symbol_count
 
@@ -138,6 +136,8 @@ class Corpus:
         for idx, (symbol, _) in enumerate(symbol_count, 3):
             self.symbol_to_idx[symbol] = idx
             self.idx_to_symbol[idx] = symbol
+
+        self.vocab_size = len(self.symbol_to_idx)
 
     def _apply_symbol_idx(self):
         """
@@ -183,5 +183,11 @@ class Corpus:
         :param batch_size: Batch size for the DataLoader.
         :return: DataLoader for the corpus.
         """
+        if batch_size > len(self.sentences):
+            logger.warning(
+                f"Batch size {batch_size} is larger than the number of sentences {len(self.sentences)}. "
+                "Using the maximum number of sentences as batch size."
+            )
+            batch_size = len(self.sentences)
         dataset = SentenceDataset(self.sentences)
-        return DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=list_collate_fn)
