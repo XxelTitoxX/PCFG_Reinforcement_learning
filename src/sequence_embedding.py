@@ -366,7 +366,7 @@ class WordTagEmbedder(nn.Module):
         """
         word_embeddings = self.word_embedder(batch_sentences)
         device = word_embeddings.device
-        pos_tags = [torch.tensor(sentence.pos_tags, device=device)+self.num_nt for sentence in batch_sentences]
+        pos_tags = [torch.tensor(sentence.pos_tags, device=device) for sentence in batch_sentences] # + self.num_nt
         pos_tags = torch.nn.utils.rnn.pad_sequence(pos_tags, batch_first=True, padding_value=-1)
         tag_embeddings = self.tag_embedder(pos_tags)
         
@@ -376,7 +376,7 @@ class WordTagEmbedder(nn.Module):
         projected_embeddings = self.projection(combined_embeddings)
         return projected_embeddings
 
-        #return tag_embeddings
+        #return word_embeddings
 
 
 class InductionEmbedder(nn.Module):

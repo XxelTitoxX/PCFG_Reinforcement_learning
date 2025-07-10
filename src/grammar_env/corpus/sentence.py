@@ -11,6 +11,8 @@ __all__ = ['GoldSpan', 'Sentence']
 
 logger = getLogger(__name__)
 
+# DATASET = 'ptb'
+DATASET = 'toy_grammar'
 
 POS_CLUSTER: dict[str, str] = {
             "CC": "CC",
@@ -87,6 +89,36 @@ NT_TAG_TO_IDX = {
     'SINV': 18, 'SQ': 19, 'UCP': 20, 'VP': 21, 'WHADJP': 22, 'WHADVP': 23, 'WHNP': 24, 'WHPP': 25
 }
 
+def toy_grammar_nt_tag_to_idx(tag: str) -> int:
+    assert tag[:2] == 'NT', f"NT tag should start with 'NT', but got {tag}"
+    return int(tag[2:])
+
+def toy_grammar_pos_tag_to_idx(tag: str) -> int:
+    assert tag[:2] == 'PT', f"PT tag should start with 'PT', but got {tag}"
+    return int(tag[2:])
+
+def ptb_nt_tag_to_idx(tag: str) -> int:
+    return NT_TAG_TO_IDX[remove_after_dash(tag)]
+
+def ptb_pos_tag_to_idx(tag: str) -> int:
+    return POS_CLUSTER_TO_IDX[POS_CLUSTER[tag]]
+
+def nt_tag_to_idx(tag: str) -> int:
+    if DATASET == 'toy_grammar':
+        return toy_grammar_nt_tag_to_idx(tag)
+    elif DATASET == 'ptb':
+        return ptb_nt_tag_to_idx(tag)
+    else:
+        raise ValueError(f"Unknown dataset: {DATASET}. Supported datasets are 'toy_grammar' and 'ptb'.")
+    
+def pos_tag_to_idx(tag: str) -> int:
+    if DATASET == 'toy_grammar':
+        return toy_grammar_pos_tag_to_idx(tag)
+    elif DATASET == 'ptb':
+        return ptb_pos_tag_to_idx(tag)
+    else:
+        raise ValueError(f"Unknown dataset: {DATASET}. Supported datasets are 'toy_grammar' and 'ptb'.")
+
 def remove_after_dash(s:str) -> str:
     """
     Removes everything after the first '-' or '=' or '|' character in a string, including the character itself.
@@ -120,7 +152,7 @@ class GoldSpan:
         return (self.start, self.end)
 
 
-def sanitize(symbol: str) -> str:
+def ptb_sanitize(symbol: str) -> str:
     """
     Replace numbers in raw with '<num>'.
     Lower case the symbol.
@@ -128,6 +160,11 @@ def sanitize(symbol: str) -> str:
     Given '1992', return '<num>'.
     """
     return re.sub('[0-9]+([,.]?[0-9]*)*', '<num>', symbol).lower()
+
+def sanitize(symbol: str) -> str:
+    if DATASET == 'ptb':
+        return ptb_sanitize(symbol)
+    return symbol
 
 
 @dataclass_json
@@ -289,10 +326,13 @@ class Sentence:
                     if span[0] != span[1]:
                         self.gold_spans.append(GoldSpan(nt.tag, span[0], span[1]))
 
-                    for left in intermediate_left:
-                        self.tree_sr_spans.append(GoldSpan(nt.tag, left, span[1]))
+                    for idx, left in enumerate(intermediate_left):
+                        self.tree_sr_spans.append(GoldSpan(nt.tag+"'", left, span[1]))
                         self.tree_sr.append('R')
-                        self.binary_gt_spans[(left, span[1])] = NT_TAG_TO_IDX[remove_after_dash(nt.tag)]
+                        if idx == len(intermediate_left) - 1: # This is the root of the binarization : we give the original NT tag
+                            self.binary_gt_spans[(left, span[1])] = nt_tag_to_idx(nt.tag) #*2
+                        else: # This is an intermediate node of the binarization : we give the modified NT tag
+                            self.binary_gt_spans[(left, span[1])] = nt_tag_to_idx(nt.tag) #*2 +1
 
         assert len(stack) == 1 and isinstance(stack[0], tuple), f"Stack: {stack}"
         assert pointer == len(self.symbols), f"Pointer: {pointer}, Symbols: {self.symbols}"
@@ -336,7 +376,7 @@ class Sentence:
         for action in self.actions_sanitized:
             match action:
                 case Shift(pos_tag, symbol):
-                    sentence_pos_tags.append(POS_CLUSTER_TO_IDX[POS_CLUSTER[pos_tag]])
+                    sentence_pos_tags.append(pos_tag_to_idx(pos_tag))
                 case _:
                     pass
             self.pos_tags = sentence_pos_tags

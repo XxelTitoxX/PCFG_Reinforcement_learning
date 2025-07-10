@@ -54,8 +54,8 @@ class ResultSaver:
         self.valid_probability_criterion: Criterion = ProbabilityCriterion(device)
         self.valid_coverage_criterion: Criterion = CoverageCriterion(device)
 
-        self.train_env: Environment = Environment(min(num_sentences_per_score, len(train_corpus)), max_num_steps, 0.0, device)
-        self.valid_env: Environment = Environment(num_sentences_per_score, max_num_steps, 0.0, device)
+        self.train_env: Environment = Environment(max_num_steps, 0.0, device)
+        self.valid_env: Environment = Environment(max_num_steps, 0.0, device)
 
     def save(
             self, name: str, i_so_far: int, actor_critic: ActorCritic,
@@ -93,7 +93,7 @@ class ResultSaver:
                 valid_f1=valid_f1, valid_prob=valid_prob, valid_cov=valid_cov,
                 #len=len(binary_grammar), binary_grammar=binary_grammar
             )
-
+            print(f"ITER: {i_so_far}, train_f1: {train_f1:.5f}, valid_f1: {valid_f1:.5f}")
             logger.info(f"saving name: {name}, i_so_far: {i_so_far} result: {result}")
 
             path: Path = self.persistent_dir / "result" / f"{i_so_far}_{name}.json"

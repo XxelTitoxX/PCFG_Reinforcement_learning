@@ -87,6 +87,10 @@ class Corpus:
             f"max_vocab_size={self.max_vocab_size}, "
             f"max_len={self.max_len}"
         )
+        self._initialize_NT_histogram()
+        self._initialize_PT_histogram()
+        logger.info(f"Non-terminal frequencies : {self.symbol_freq}")
+        logger.info(f"Part-of-speech frequencies : {self.pt_freq}")
 
     def _initialize_sentences(self) -> None:
         with open(self.ptb_path, 'r') as file:
@@ -153,10 +157,10 @@ class Corpus:
         """
         Print the histogram of non-terminal symbols in the corpus.
         """
-        nt_count: defaultdict[str, int] = defaultdict(int)
+        nt_count: defaultdict[int, int] = defaultdict(int)
         for sentence in self.sentences:
-            for span in sentence.tree_sr_spans:
-                nt_count[remove_after_dash(span.tag)] += 1
+            for sym in sentence.binary_gt_spans.values():
+                nt_count[sym] += 1
         overall_count = sum(nt_count.values())
         normalized_count = {k: v / overall_count for k, v in nt_count.items()}
         self.symbol_freq = normalized_count
@@ -165,7 +169,7 @@ class Corpus:
         """
         Print the histogram of part-of-speech tags in the corpus.
         """
-        pt_count: defaultdict[str, int] = defaultdict(int)
+        pt_count: defaultdict[int, int] = defaultdict(int)
         for sentence in self.sentences:
             for pos_tag in sentence.pos_tags:
                 pt_count[pos_tag] += 1

@@ -12,6 +12,11 @@ from writer import Writer
 
 logger = logging.getLogger(__name__)
 
+#TRAIN_DATASET_FILENAME: str = "ptb-train.txt"
+TRAIN_DATASET_FILENAME: str = "train_sentences.txt"
+#VALID_DATASET_FILENAME: str = "ptb-valid.txt"
+VALID_DATASET_FILENAME: str = "val_sentences.txt"
+
 
 def datetime_tag() -> str:
     return datetime.datetime.now().strftime("%m%d_%H:%M:%S")
@@ -21,9 +26,9 @@ def train(name: str, persistent_dir: Path, args: argparse.Namespace, ppo_config:
     logger.info(f"Training name: {name}, persistent_dir: {persistent_dir} with args: {args}")
 
     train_corpus: Corpus = Corpus(
-        str(args.directory / "ptb-train.txt"), max_vocab_size=args.max_vocab_size, max_len=args.max_len, max_sentence_length=60
+        str(args.directory / TRAIN_DATASET_FILENAME), max_vocab_size=args.max_vocab_size, max_len=args.max_len, max_sentence_length=60
     )
-    valid_corpus: Corpus = Corpus(str(args.directory / "ptb-valid.txt"))
+    valid_corpus: Corpus = Corpus(str(args.directory / VALID_DATASET_FILENAME))
     train_corpus._initialize_symbol_idx()
     # train and valid corpus must use the same symbol_to_idx and idx_to_symbol for the correct results
     valid_corpus.symbol_to_idx = train_corpus.symbol_to_idx

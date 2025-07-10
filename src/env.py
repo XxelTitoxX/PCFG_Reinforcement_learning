@@ -96,37 +96,38 @@ def overlap_ratio(a: tuple[int, int], b: tuple[int, int]) -> float:
     overlap = max(0, min(end_a, end_b) - max(start_a, start_b) + 1)
     return overlap / (max(end_a, end_b) - min(start_a, start_b) + 1)
 
+    
+
 class Environment:
-    def __init__(self, num_episodes, max_num_steps, success_weight:float, device: torch.device, symbol_freq: dict[str, float] = None, n_gram: NGram = None):
+    def __init__(self, max_num_steps, success_weight:float, device: torch.device, symbol_freq: dict[str, float] = None, n_gram: NGram = None):
         self.symbol_freq = symbol_freq
         self.n_gram = n_gram
         self.device = device
         self.max_num_steps = max_num_steps
-        self.num_episodes = num_episodes
         self.success_weight = success_weight
 
-        self.state : Optional[torch.Tensor] = None
-        self.spans_sentences: Optional[torch.Tensor] = None
-        self.spans_lists: list[list[tuple[int, int]]] = [[] for _ in range(num_episodes)]
-        self.sentence_lengths: torch.Tensor = torch.zeros(num_episodes, dtype=torch.int32, device=device)
+        self.state : torch.Tensor = None
+        self.spans_sentences: torch.Tensor = None
+        self.spans_lists: list[list[tuple[int, int]]] = None
+        self.sentence_lengths: torch.Tensor = None
 
-        self.action_positions : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
-        self.positions_log_probs : torch.Tensor = torch.full((num_episodes, max_num_steps), float('-inf'), dtype=torch.float32, device=device)
-        self.action_symbols : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
-        self.symbols_log_probs : torch.Tensor = torch.full((num_episodes, max_num_steps), float('-inf'), dtype=torch.float32, device=device)
-        self.update_positions : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
-        self.update_symbols : torch.Tensor = torch.full((num_episodes, max_num_steps), -1, dtype=torch.int32, device=device)
-        self.rew : torch.Tensor = torch.zeros((num_episodes, max_num_steps), dtype=torch.float32, device=device)
-        self.sym_rew : torch.Tensor = torch.zeros((num_episodes, max_num_steps), dtype=torch.float32, device=device)
-        self.state_val: torch.Tensor = torch.zeros((num_episodes, max_num_steps), dtype=torch.float32, device=device)
+        self.action_positions : torch.Tensor = None
+        self.positions_log_probs : torch.Tensor = None
+        self.action_symbols : torch.Tensor = None
+        self.symbols_log_probs : torch.Tensor = None
+        self.update_positions : torch.Tensor = None
+        self.update_symbols : torch.Tensor = None
+        self.rew : torch.Tensor = None
+        self.sym_rew : torch.Tensor = None
+        self.state_val: torch.Tensor = None
 
         self.step_count : int = 0
-        self.done : torch.Tensor = torch.zeros(num_episodes, dtype=torch.bool, device=device)
-        self.ep_len : torch.Tensor = torch.full((num_episodes,), max_num_steps, dtype=torch.int32, device=device)
+        self.done : torch.Tensor = None
+        self.ep_len : torch.Tensor = None
         self.cls_tokens: Optional[torch.Tensor] = None
 
     def reset(self, batch_sentences: list[Sentence], batch_s_embeddings: torch.Tensor):
-        # batch_sentences: [num_episodes, sentence_length, embedding dim]
+        self.num_episodes = len(batch_sentences)
         self.sentences = batch_sentences
         self.state = batch_s_embeddings.to(self.device)
         self.cls_tokens = torch.zeros((self.num_episodes, batch_s_embeddings.shape[2]), dtype=torch.float32, device=self.device)
@@ -149,18 +150,18 @@ class Environment:
 
         self.spans_lists = [[] for _ in range(self.num_episodes)]
 
-        self.action_positions.fill_(-1)
-        self.positions_log_probs.fill_(float('-inf'))
-        self.action_symbols.fill_(-1)
-        self.symbols_log_probs.fill_(float('-inf'))
-        self.update_positions.fill_(-1)
-        self.update_symbols.fill_(-1)
-        self.rew.zero_()
-        self.sym_rew.zero_()
-        self.state_val.zero_()
+        self.action_positions = torch.full((self.num_episodes, self.max_num_steps), -1, dtype=torch.int32, device=self.device)
+        self.positions_log_probs = torch.full((self.num_episodes, self.max_num_steps), float('-inf'), dtype=torch.float32, device=self.device)
+        self.action_symbols = torch.full((self.num_episodes, self.max_num_steps), -1, dtype=torch.int32, device=self.device)
+        self.symbols_log_probs = torch.full((self.num_episodes, self.max_num_steps), float('-inf'), dtype=torch.float32, device=self.device)
+        self.update_positions = torch.full((self.num_episodes, self.max_num_steps), -1, dtype=torch.int32, device=self.device)
+        self.update_symbols = torch.full((self.num_episodes, self.max_num_steps), -1, dtype=torch.int32, device=self.device)
+        self.rew = torch.zeros((self.num_episodes, self.max_num_steps), dtype=torch.float32, device=self.device)
+        self.sym_rew = torch.zeros((self.num_episodes, self.max_num_steps), dtype=torch.float32, device=self.device)
+        self.state_val = torch.zeros((self.num_episodes, self.max_num_steps), dtype=torch.float32, device=self.device)
         self.step_count = 0
-        self.done.zero_()
-        self.ep_len.fill_(self.max_num_steps)
+        self.done = torch.zeros(self.num_episodes, dtype=torch.bool, device=self.device)
+        self.ep_len = torch.full((self.num_episodes,), self.max_num_steps, dtype=torch.int32, device=self.device)
         self.check_done()
 
 
@@ -173,7 +174,7 @@ class Environment:
         self.done = done
         self.ep_len[done] = torch.minimum(self.ep_len[done], torch.tensor(self.step_count, device=self.device))
 
-    def step(self, action_positions: torch.Tensor, positions_log_probs: torch.Tensor, action_symbols: torch.Tensor, symbols_log_probs: torch.Tensor, update_positions: torch.Tensor, update_symbols: torch.Tensor, state_value: torch.Tensor, args: dict = None):
+    def step(self, action_positions: torch.Tensor, positions_log_probs: torch.Tensor, action_symbols: torch.Tensor, symbols_log_probs: torch.Tensor, update_positions: torch.Tensor, update_symbols: torch.Tensor, state_value: torch.Tensor, args: dict = None, evaluate: bool = False):
         new_constituents, drp_new_constituents = args["new_constituent"], args["drp_new_constituent"]
 
         not_done = ~self.done
@@ -202,25 +203,27 @@ class Environment:
         self.update_symbols[not_done, self.step_count] = update_symbols
         self.state_val[not_done, self.step_count] = state_value
 
+        if not evaluate:
+            
+            action_spans = torch.stack((current_spans[not_done_range, action_positions, 0], current_spans[not_done_range, action_positions + 1, 1]), dim=1)
+            self.rew[not_done, self.step_count] = self.supervised_spans_reward(not_done, action_spans)
+            #self.rew[not_done, self.step_count] = self.contrastive_loss_vec(current_state, action_positions, current_mask)
+            #self.rew[not_done, self.step_count] = self.overlap_sym_reward(not_done, new_spans, action_symbols)
+            #self.rew[not_done, self.step_count] = self.n_gram_reward(not_done, current_spans[not_done_range, action_positions], current_spans[not_done_range, action_positions + 1])
+            #self.rew[not_done, self.step_count] = self.n_gram_attraction(not_done, action_positions, current_spans)
+            
+            #self.sym_rew[not_done, self.step_count] = self.supervised_sym_reward(not_done, new_spans, action_symbols)
+            self.sym_rew[not_done, self.step_count] = self.overlap_sym_reward(not_done, new_spans, action_symbols)
+            #self.sym_rew[not_done, self.step_count] = (F.cosine_similarity(drp_new_constituents, new_constituents, dim=1)+1)/2
 
-        action_spans = torch.stack((current_spans[not_done_range, action_positions, 0], current_spans[not_done_range, action_positions + 1, 1]), dim=1)
-        self.rew[not_done, self.step_count] = self.supervised_spans_reward(not_done, action_spans)
-        #self.rew[not_done, self.step_count] = self.contrastive_loss_vec(current_state, action_positions, current_mask)
-        #self.rew[not_done, self.step_count] = self.overlap_sym_reward(not_done, new_spans, action_symbols)
-        #self.rew[not_done, self.step_count] = self.n_gram_reward(not_done, current_spans[not_done_range, action_positions], current_spans[not_done_range, action_positions + 1])
-        
-        #self.sym_rew[not_done, self.step_count] = self.supervised_sym_reward(not_done, new_spans, action_symbols)
-        self.sym_rew[not_done, self.step_count] = self.overlap_sym_reward(not_done, new_spans, action_symbols)
-        #self.sym_rew[not_done, self.step_count] = (F.cosine_similarity(drp_new_constituents, new_constituents, dim=1)+1)/2
-
-        #self.rew[not_done, self.step_count] = 0.5 * (self.rew[not_done, self.step_count] + self.sym_rew[not_done, self.step_count])
-        '''
-        if self.step_count > 0:
-            cls_cossim = self.reward_cossim_cls(not_done, cls_token)
-            #self.rew[not_done, self.step_count-1] = cls_cossim
-            self.sym_rew[not_done, self.step_count-1] = cls_cossim
-        '''
-        #self.cls_tokens[not_done] = cls_token
+            #self.rew[not_done, self.step_count] = 0.5 * (self.rew[not_done, self.step_count] + self.sym_rew[not_done, self.step_count])
+            '''
+            if self.step_count > 0:
+                cls_cossim = self.reward_cossim_cls(not_done, cls_token)
+                #self.rew[not_done, self.step_count-1] = cls_cossim
+                self.sym_rew[not_done, self.step_count-1] = cls_cossim
+            '''
+            #self.cls_tokens[not_done] = cls_token
 
 
         self.step_count += 1
@@ -280,7 +283,8 @@ class Environment:
         for i in range(len(new_spans)):
             spans_with_pred_sym = [span for span, symm in gt_spans[i].items() if symm == new_symbols[i].item()]
             if len(spans_with_pred_sym) > 0:
-                sym_reward[i] = max([overlap_ratio((new_spans[i,0].item(), new_spans[i,1].item()), span) for span in spans_with_pred_sym]) if self.symbol_freq is None else max([overlap_ratio((new_spans[i,0].item(), new_spans[i,1].item()), span) for span in spans_with_pred_sym])*(1.0-self.symbol_freq[IDX_TO_NT_TAG[new_symbols[i].item()]])
+                nt_factor = 1.0 if self.symbol_freq is None else min(10.0, 1/(len(self.symbol_freq.keys())*self.symbol_freq.get(new_symbols[i].item(), 0.0) + 1e-9))
+                sym_reward[i] = max([overlap_ratio((new_spans[i,0].item(), new_spans[i,1].item()), span) for span in spans_with_pred_sym]) * nt_factor
             else:
                 sym_reward[i] = 0
 
@@ -391,6 +395,32 @@ class Environment:
         for i in range(num_sentences):
             rewards[i] = left_right_prob(i)
         return rewards
+    
+    def n_gram_attraction(self, not_done: torch.Tensor, positions: torch.Tensor, spans_sen: torch.Tensor):
+        if self.n_gram is None:
+            return torch.zeros(positions.shape[0], dtype=torch.float32, device=self.device)
+        indices = torch.arange(positions.shape[0], device=self.device)
+        current_sen_lengths = torch.sum(spans_sen[:, :, 0] > -1, dim=1)
+        sentences = [s for i,s in enumerate(self.sentences) if not_done[i]]
+        left_spans = spans_sen[indices, positions]
+        center_spans = spans_sen[indices, positions + 1]
+
+        valid_right =  positions + 2 < current_sen_lengths
+        right_spans = torch.zeros_like(left_spans)
+        right_spans[valid_right] = spans_sen[indices[valid_right], positions[valid_right] + 2]
+
+        attraction = torch.zeros(positions.shape[0], dtype=torch.float32, device=self.device)
+        for  i in range(positions.shape[0]):
+            left_constituents = tuple(sentences[i].pos_tags[left_spans[i, 0].item():left_spans[i, 1].item() + 1])
+            center_constituents = tuple(sentences[i].pos_tags[center_spans[i, 0].item():center_spans[i, 1].item() + 1])
+            if valid_right[i]:
+                right_constituents = tuple(sentences[i].pos_tags[right_spans[i, 0].item():right_spans[i, 1].item() + 1])
+            else:
+                right_constituents = tuple()
+            attraction[i] = self.n_gram.compute_attraction(left_constituents, center_constituents, right_constituents)
+        return attraction
+            
+            
 
     
     def supervised_spans_reward_v2(self, not_done: torch.Tensor, pred_new_spans:torch.Tensor, gt_new_spans: torch.Tensor, new_symbols: torch.Tensor):
@@ -494,8 +524,6 @@ class Environment:
         """
         time_s = time.time()
 
-        assert len(batch_sentences) == self.num_episodes, f"Data batch size {len(batch_sentences)} does not match num_episodes {self.num_episodes}"
-
         actor_critic.eval()
 
         batch_s_embeddings = actor_critic.encode_sentence(batch_sentences)
@@ -514,20 +542,21 @@ class Environment:
             else:
                 gt_pos, gt_sym, gt_new_spans = None, None, None
             current_states, not_done = self.get_state()
+            not_done_range = torch.arange(not_done.sum().item(), device=self.device)
             position, position_log_prob, symbol, symbol_log_prob, state_value = actor_critic.act(current_states, self.get_mask()[not_done], max_prob=evaluate, gt_positions=gt_pos)
             #cls_token = actor_critic.get_cls_token(current_states, self.get_mask()[not_done])
             assert position.shape == position_log_prob.shape == symbol.shape == symbol_log_prob.shape == state_value.shape == (not_done.sum().item(),), f"Shape mismatch: {position.shape}, {position_log_prob.shape}, {symbol.shape}, {symbol_log_prob.shape}, {state_value.shape}, {(not_done.sum().item(),)}"
 
             current_spans_sentences = self.spans_sentences[not_done]
-            action_spans = torch.stack([current_spans_sentences[torch.arange(not_done.sum().item()), position, 0], current_spans_sentences[torch.arange(not_done.sum().item()), position + 1, 1]], dim=1)
+            action_spans = torch.stack([current_spans_sentences[not_done_range, position, 0], current_spans_sentences[not_done_range, position + 1, 1]], dim=1)
             #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, self.supervised_update_sym(not_done, action_spans))
             #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, torch.zeros_like(symbol, dtype=torch.int32, device=self.device))
             #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (gt_pos, symbol)
             update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, symbol)
 
             # Compute new constituents embeddings
-            left = current_states[torch.arange(not_done.sum().item()), update_position, :]
-            right = current_states[torch.arange(not_done.sum().item()), update_position + 1, :]
+            left = current_states[not_done_range, update_position, :]
+            right = current_states[not_done_range, update_position + 1, :]
             emb_sym = actor_critic.tag_embedder(update_symbol)
             new_constituent = actor_critic.fuse_constituents(emb_sym, left, right)
             # Constituent embedding with dropout for additional objective
@@ -535,7 +564,7 @@ class Environment:
             #new_constituent = new_constituent if evaluate else drp_new_constituent
 
             args = {"new_constituent": new_constituent, "drp_new_constituent": drp_new_constituent}
-            self.step(position, position_log_prob, symbol, symbol_log_prob, update_position, update_symbol, state_value, args=args)
+            self.step(position, position_log_prob, symbol, symbol_log_prob, update_position, update_symbol, state_value, args=args, evaluate=evaluate)
 
 
             if self.stop():
@@ -604,4 +633,5 @@ class Environment:
         add_obj = add_obj / (nb_terms+1)
         mask = torch.arange(max_seq_len-1, device=self.device)[None, :] < self.ep_len[:, None]
         return curr_pos_log_probs[mask], curr_pos_entropies[mask], curr_sym_log_probs[mask], curr_sym_entropies[mask], curr_values[mask], add_obj
+    
 
