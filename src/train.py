@@ -12,10 +12,10 @@ from writer import Writer
 
 logger = logging.getLogger(__name__)
 
-#TRAIN_DATASET_FILENAME: str = "ptb-train.txt"
-TRAIN_DATASET_FILENAME: str = "train_sentences.txt"
-#VALID_DATASET_FILENAME: str = "ptb-valid.txt"
-VALID_DATASET_FILENAME: str = "val_sentences.txt"
+TRAIN_DATASET_FILENAME: str = "ptb-train.txt"
+#TRAIN_DATASET_FILENAME: str = "train_sentences.txt"
+VALID_DATASET_FILENAME: str = "ptb-valid.txt"
+#VALID_DATASET_FILENAME: str = "val_sentences.txt"
 
 
 def datetime_tag() -> str:

@@ -148,7 +148,7 @@ class Environment:
         all_start_spans = all_start_spans.unsqueeze(0).repeat(self.num_episodes, 1, 1)
         self.spans_sentences[valid_symbols] = all_start_spans[valid_symbols]
 
-        self.spans_lists = [[] for _ in range(self.num_episodes)]
+        self.spans_lists : list[dict[tuple[int, int], int]] = [{} for _ in range(self.num_episodes)]
 
         self.action_positions = torch.full((self.num_episodes, self.max_num_steps), -1, dtype=torch.int32, device=self.device)
         self.positions_log_probs = torch.full((self.num_episodes, self.max_num_steps), float('-inf'), dtype=torch.float32, device=self.device)
@@ -193,7 +193,7 @@ class Environment:
         self.spans_sentences[not_done] = next_spans
 
         for i in range(len(new_spans)):
-            self.spans_lists[not_done_idx[i]].append((new_spans[i, 0].item(), new_spans[i, 1].item()))
+            self.spans_lists[not_done_idx[i]][(new_spans[i, 0].item(), new_spans[i, 1].item())] = action_symbols[i].item()
 
         self.action_positions[not_done, self.step_count] = action_positions
         self.positions_log_probs[not_done, self.step_count] = positions_log_probs

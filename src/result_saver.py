@@ -7,7 +7,7 @@ import torch
 from dataclasses_json import dataclass_json
 
 from grammar_env.corpus.corpus import Corpus
-from grammar_env.criterion import CoverageCriterion, Criterion, F1Criterion, ProbabilityCriterion
+from grammar_env.criterion import CoverageCriterion, Criterion, F1Criterion, ProbabilityCriterion, LabelledF1Criterion
 from actor_critic import ActorCritic
 from env import Environment
 from writer import Writer
@@ -19,9 +19,11 @@ logger = getLogger(__name__)
 @dataclass(frozen=True)
 class Result:
     train_f1: float
+    train_labelled_f1: float
     train_prob: float
     train_cov: float
     valid_f1: float
+    valid_labelled_f1: float
     valid_prob: float
     valid_cov: float
     #len: int
@@ -48,9 +50,11 @@ class ResultSaver:
         self.valid_iterator = iter(self.valid_dataloader)
 
         self.train_f1_criterion: Criterion = F1Criterion(device)
+        self.train_labelled_f1_criterion: Criterion = LabelledF1Criterion(device)
         self.train_probability_criterion: Criterion = ProbabilityCriterion(device)
         self.train_coverage_criterion: Criterion = CoverageCriterion(device)
         self.valid_f1_criterion: Criterion = F1Criterion(device)
+        self.valid_labelled_f1_criterion: Criterion = LabelledF1Criterion(device)
         self.valid_probability_criterion: Criterion = ProbabilityCriterion(device)
         self.valid_coverage_criterion: Criterion = CoverageCriterion(device)
 
@@ -82,6 +86,9 @@ class ResultSaver:
             train_f1: float = torch.mean(self.train_f1_criterion.score_sentences(self.train_env)).item()
             valid_f1: float = torch.mean(self.valid_f1_criterion.score_sentences(self.valid_env)).item()
 
+            train_labelled_f1: float = torch.mean(self.train_labelled_f1_criterion.score_sentences(self.train_env)).item()
+            valid_labelled_f1: float = torch.mean(self.valid_labelled_f1_criterion.score_sentences(self.valid_env)).item()
+
             train_prob: float = torch.mean(self.train_probability_criterion.score_sentences(self.train_env)).item()
             valid_prob: float = torch.mean(self.valid_probability_criterion.score_sentences(self.valid_env)).item()
             
@@ -89,8 +96,8 @@ class ResultSaver:
             valid_cov: float = torch.mean(self.valid_coverage_criterion.score_sentences(self.valid_env)).item()
 
             result: Result = Result(
-                train_f1=train_f1, train_prob=train_prob, train_cov=train_cov,
-                valid_f1=valid_f1, valid_prob=valid_prob, valid_cov=valid_cov,
+                train_f1=train_f1, train_labelled_f1=train_labelled_f1, train_prob=train_prob, train_cov=train_cov,
+                valid_f1=valid_f1, valid_labelled_f1=valid_labelled_f1, valid_prob=valid_prob, valid_cov=valid_cov,
                 #len=len(binary_grammar), binary_grammar=binary_grammar
             )
             print(f"ITER: {i_so_far}, train_f1: {train_f1:.5f}, valid_f1: {valid_f1:.5f}")
@@ -104,9 +111,11 @@ class ResultSaver:
             self.writer.log(
                 {
                     f"train/{name}_f1": train_f1,
+                    f"train/{name}_labelled_f1": train_labelled_f1,
                     f"train/{name}_prob": train_prob,
                     f"train/{name}_cov": train_cov,
                     f"valid/{name}_f1": valid_f1,
+                    f"valid/{name}_labelled_f1": valid_labelled_f1,
                     f"valid/{name}_prob": valid_prob,
                     f"valid/{name}_cov": valid_cov,
                 }, commit=commit

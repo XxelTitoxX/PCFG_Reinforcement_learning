@@ -158,6 +158,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_train_sentences', type=int, default=10000, help="Number of sentences from target grammar for the model training.")
     parser.add_argument('--max_length', type=int, default=70, help="Maximum length of the sentences to generate.")
     parser.add_argument('--n_grammars', type=int, default=8, help="Number of target grammars to generate.")
+    parser.add_argument('--gen_grammars', action='store_true', help="Generate target grammars and save them to files.")
 
     args = parser.parse_args()
 
@@ -174,22 +175,22 @@ if __name__ == "__main__":
     }
 
     for i in range(args.n_grammars):
-
-        target_grammar = CFG(**cfg_params)
-        target_grammar.random_initialize()
         target_grammar_path = CURRENT_DIR / 'target_grammar' / f'target_cfg_{i}.txt'
-        target_grammar.save_grammar_as_nltk(target_grammar_path)
-        sentences = target_grammar.generate_unique_strings(args.n_train_sentences, args.max_length, format='ptb')
-        print(f"Generated {len(sentences)} sentences for target grammar {i} with max length {args.max_length}")
-        training_corpus_path : Path = CURRENT_DIR / 'target_grammar' / f'training_corpus_{i}.txt'
-        val_corpus_path : Path = CURRENT_DIR / 'target_grammar' / f'val_corpus_{i}.txt'
-        val_split_idx = int(0.8 * len(sentences))
-        save_to_file(sentences[:val_split_idx], training_corpus_path)
-        save_to_file(sentences[val_split_idx:], val_corpus_path)
-        test_sentences = target_grammar.generate_unique_strings(args.n_test_sentences, args.max_length, format='raw')
-        test_corpus_path : Path = CURRENT_DIR / 'target_grammar' / f'test_corpus_{i}.txt'
-        save_to_file(test_sentences, test_corpus_path)
-        print(f"Generated target grammar {i} with {len(sentences)} training sentences and {len(test_sentences)} test sentences, saved to {str(CURRENT_DIR / 'target_grammar')}")
+        training_corpus_path = CURRENT_DIR / 'target_grammar' / f'training_corpus_{i}.txt'
+        val_corpus_path = CURRENT_DIR / 'target_grammar' / f'val_corpus_{i}.txt'
+        test_corpus_path = CURRENT_DIR / 'target_grammar' / f'test_corpus_{i}.txt'
+        if args.gen_grammars:
+            target_grammar = CFG(**cfg_params)
+            target_grammar.random_initialize()
+            target_grammar.save_grammar_as_nltk(target_grammar_path)
+            sentences = target_grammar.generate_unique_strings(args.n_train_sentences, args.max_length, format='ptb')
+            print(f"Generated {len(sentences)} sentences for target grammar {i} with max length {args.max_length}")
+            val_split_idx = int(0.8 * len(sentences))
+            save_to_file(sentences[:val_split_idx], training_corpus_path)
+            save_to_file(sentences[val_split_idx:], val_corpus_path)
+            test_sentences = target_grammar.generate_unique_strings(args.n_test_sentences, args.max_length, format='raw')
+            save_to_file(test_sentences, test_corpus_path)
+            print(f"Generated target grammar {i} with {len(sentences)} training sentences and {len(test_sentences)} test sentences, saved to {str(CURRENT_DIR / 'target_grammar')}")
 
         # Load the corpus
         train_corpus = Corpus(training_corpus_path)

@@ -34,15 +34,35 @@ class F1Criterion(Criterion):
     def score_sentences(
             self, env : Environment
     ) -> torch.Tensor:
-        pred_spans: list[list[tuple[int, int]]] = env.spans_lists
+        pred_spans: list[set[tuple[int, int]]] = [set(spans.keys()) for spans in env.spans_lists]
         gold_spans: list[set[tuple[int, int]]] = [set(sspans.keys()) for sspans in env.gt_spans]
 
         f1_scores: list[float] = []
         for gt_spans, s_pred_spans, s_len in zip(gold_spans, pred_spans, env.sentence_lengths):
-            
-            pred_spans_set: set[tuple[int, int]] = set(s_pred_spans)
             whole_span: tuple[int, int] = (0, s_len - 1)
-            f1_scores.append(f1_score(gt_spans, pred_spans_set, whole_span))
+            f1_scores.append(f1_score(gt_spans, s_pred_spans, whole_span))
+        f1_scores = torch.tensor(f1_scores, device=self.device)
+        self.update_score(f1_scores)
+        return f1_scores
+    
+class LabelledF1Criterion(Criterion):
+    def __init__(
+            self, device: torch.device,
+    ):
+        super().__init__(device)
+
+    def score_sentences(
+            self, env : Environment
+    ) -> torch.Tensor:
+        pred_spans: list[set[tuple[int, int]]] = env.spans_lists
+        gold_spans: list[set[tuple[int, int]]] = env.gt_spans
+
+        f1_scores: list[float] = []
+        for gt_spans, s_pred_spans, s_len in zip(gold_spans, pred_spans, env.sentence_lengths):
+            whole_span: tuple[int, int] = (0, s_len - 1)
+            gt_spans = set((span[0], span[1], sym) for span, sym in gt_spans.items() if span != whole_span)
+            s_pred_spans = set((span[0], span[1], sym) for span, sym in s_pred_spans.items() if span != whole_span)
+            f1_scores.append(f1_score(gt_spans, s_pred_spans, whole_span))
         f1_scores = torch.tensor(f1_scores, device=self.device)
         self.update_score(f1_scores)
         return f1_scores

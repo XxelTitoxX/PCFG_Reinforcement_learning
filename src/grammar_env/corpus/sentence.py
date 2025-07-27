@@ -11,8 +11,8 @@ __all__ = ['GoldSpan', 'Sentence']
 
 logger = getLogger(__name__)
 
-# DATASET = 'ptb'
-DATASET = 'toy_grammar'
+DATASET = 'ptb'
+#DATASET = 'toy_grammar'
 
 POS_CLUSTER: dict[str, str] = {
             "CC": "CC",
@@ -246,12 +246,11 @@ class Sentence:
         self.actions_sanitized: list[Action] = []
 
         for action in self.actions:
-            match action:
-                case Shift(tag, symbol):
-                    self.symbols.append(sanitize(symbol))
-                    self.actions_sanitized.append(Shift(tag, sanitize(symbol)))
-                case _:
-                    self.actions_sanitized.append(action)
+            if isinstance(action, Shift):
+                self.symbols.append(sanitize(action.symbol))
+                self.actions_sanitized.append(Shift(action.tag, sanitize(action.symbol)))
+            else:
+                self.actions_sanitized.append(action)
 
         self._initialize_gold_and_sr()
 
@@ -290,49 +289,48 @@ class Sentence:
         """
 
         for action in self.actions:
-            match action:
-                case NT(tag):
-                    stack.append(NT(tag))
-                case Shift(_):
-                    stack.append((pointer, pointer))
-                    pointer += 1
-                    self.tree_sr.append('S')
-                case Reduce():
-                    assert len(stack) > 0 and isinstance(stack[-1], tuple), f"Stack: {stack}"
-                    span: tuple[int, int] = stack.pop()
+            if isinstance(action, NT):
+                stack.append(action)
+            if isinstance(action, Shift):
+                stack.append((pointer, pointer))
+                pointer += 1
+                self.tree_sr.append('S')
+            if isinstance(action, Reduce):
+                assert len(stack) > 0 and isinstance(stack[-1], tuple), f"Stack: {stack}"
+                span: tuple[int, int] = stack.pop()
 
-                    intermediate_left: list[int] = []
-                    while isinstance(stack[-1], tuple):
-                        span = (stack.pop()[0], span[1])
-                        intermediate_left.append(span[0])
+                intermediate_left: list[int] = []
+                while isinstance(stack[-1], tuple):
+                    span = (stack.pop()[0], span[1])
+                    intermediate_left.append(span[0])
 
-                    assert len(stack) > 0 and isinstance(stack[-1], NT), f"Stack: {stack}"
-                    nt: NT = stack.pop()
-                    self.gold_spans_all.append(GoldSpan(nt.tag, span[0], span[1]))
-                    stack.append(span)
+                assert len(stack) > 0 and isinstance(stack[-1], NT), f"Stack: {stack}"
+                nt: NT = stack.pop()
+                self.gold_spans_all.append(GoldSpan(nt.tag, span[0], span[1]))
+                stack.append(span)
 
-                    # If there is an unary reduction, there can be multiple spans with the same start and end.
-                    #
-                    # Appending if n_new_shifts > 0,
-                    # gold_spans won't have multiple spans with the same start and end.
-                    # (We ignore the duplicate.)
-                    #
-                    # Appending if span[0] != span[1],
-                    # gold_spans will have multiple spans with the same start and end.
-                    # (We do not ignore the duplicate.)
-                    #
-                    # if n_new_shifts > 0:
-                    #     self.gold_spans.append(GoldSpan(nt.tag, span[0], span[1]))
-                    if span[0] != span[1]:
-                        self.gold_spans.append(GoldSpan(nt.tag, span[0], span[1]))
+                # If there is an unary reduction, there can be multiple spans with the same start and end.
+                #
+                # Appending if n_new_shifts > 0,
+                # gold_spans won't have multiple spans with the same start and end.
+                # (We ignore the duplicate.)
+                #
+                # Appending if span[0] != span[1],
+                # gold_spans will have multiple spans with the same start and end.
+                # (We do not ignore the duplicate.)
+                #
+                # if n_new_shifts > 0:
+                #     self.gold_spans.append(GoldSpan(nt.tag, span[0], span[1]))
+                if span[0] != span[1]:
+                    self.gold_spans.append(GoldSpan(nt.tag, span[0], span[1]))
 
-                    for idx, left in enumerate(intermediate_left):
-                        self.tree_sr_spans.append(GoldSpan(nt.tag+"'", left, span[1]))
-                        self.tree_sr.append('R')
-                        if idx == len(intermediate_left) - 1: # This is the root of the binarization : we give the original NT tag
-                            self.binary_gt_spans[(left, span[1])] = nt_tag_to_idx(nt.tag) #*2
-                        else: # This is an intermediate node of the binarization : we give the modified NT tag
-                            self.binary_gt_spans[(left, span[1])] = nt_tag_to_idx(nt.tag) #*2 +1
+                for idx, left in enumerate(intermediate_left):
+                    self.tree_sr_spans.append(GoldSpan(nt.tag+"'", left, span[1]))
+                    self.tree_sr.append('R')
+                    if idx == len(intermediate_left) - 1: # This is the root of the binarization : we give the original NT tag
+                        self.binary_gt_spans[(left, span[1])] = nt_tag_to_idx(nt.tag) #*2
+                    else: # This is an intermediate node of the binarization : we give the modified NT tag
+                        self.binary_gt_spans[(left, span[1])] = nt_tag_to_idx(nt.tag) #*2 +1
 
         assert len(stack) == 1 and isinstance(stack[0], tuple), f"Stack: {stack}"
         assert pointer == len(self.symbols), f"Pointer: {pointer}, Symbols: {self.symbols}"
@@ -374,9 +372,6 @@ class Sentence:
     def __pos_tags(self):
         sentence_pos_tags = []
         for action in self.actions_sanitized:
-            match action:
-                case Shift(pos_tag, symbol):
-                    sentence_pos_tags.append(pos_tag_to_idx(pos_tag))
-                case _:
-                    pass
+            if isinstance(action, Shift):
+                sentence_pos_tags.append(pos_tag_to_idx(action.tag))
             self.pos_tags = sentence_pos_tags
