@@ -90,18 +90,18 @@ class RolloutBuffer:
 @dataclass
 class PPOConfig:
     # Grammar parameters
-    num_non_terminals: int = 6  # Number of non-terminals
+    num_non_terminals: int = 26  # Number of non-terminals
 
     # Criterion parameters
     criterion: str = "f1"  # Criterion to use for training
-    num_sentences_per_score: int = 256  # Number of sentences used to score per criterion
+    num_sentences_per_score: int = 128  # Number of sentences used to score per criterion
     num_sentences_per_batch: int = 64  # Number of sentences to process per batch
     num_epochs: int = 10
 
     # Algorithm parameters
     n_updates_per_iteration: int = 10  # Number of times to update actor/critic per iteration
     lr: float = 2e-4  # Learning rate of optimizer
-    gamma: float = 0.9  # Discount factor to be applied when calculating Rewards-To-Go
+    gamma: float = 0.0  # Discount factor to be applied when calculating Rewards-To-Go
     clip: float = 0.2  # Recommended 0.2, helps define the threshold to clip the ratio during SGA
     actor_weight: float = 1.  # Weight of the actor loss
     critic_weight: float = 0.5  # Weight of the critic loss
@@ -110,7 +110,7 @@ class PPOConfig:
     entropy_weight_min: float = 0.01  # Minimum entropy weight
     entropy_weight_decay_freq: int = 10  # How often to decay the entropy weight
 
-    max_num_steps: int = 100  # Maximum number of steps to run in the environment
+    max_num_steps: int = 70  # Maximum number of steps to run in the environment
 
     # Miscellaneous parameters
     save_freq: int = 20  # How often we save in number of iterations
@@ -123,7 +123,7 @@ class PPOConfig:
     embedding_dim: int = 64
 
     gradient_clip : Optional[float] = None
-    pure_reinforce : bool = False
+    pure_reinforce : bool = True
 
 
 class PPO:

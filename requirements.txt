@@ -1,0 +1,9 @@
+torch
+torchvision
+torchaudio
+tensorflow
+tf-keras
+numba
+jsbeautifier
+dataclasses-json
+wandb

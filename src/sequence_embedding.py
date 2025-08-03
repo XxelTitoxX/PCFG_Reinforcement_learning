@@ -213,95 +213,180 @@ class TransformerEmbedding(nn.Module):
 
         return cls_representation, encoded_sequence
     
-from transformers import XLNetTokenizer, XLNetModel, BertTokenizerFast, TFBertModel
+from transformers import XLNetTokenizer, XLNetModel, BertTokenizerFast, TFBertModel, BertModel
 
-class BertWordEmbedder(torch.nn.Module):
+
+# class BertWordEmbedder(torch.nn.Module):
+#     def __init__(self, embedding_dim, model_name='bert-base-cased'):
+#         super().__init__()
+#         self.tokenizer = BertTokenizerFast.from_pretrained(model_name)
+#         self.model = TFBertModel.from_pretrained(model_name)
+#         self.embedding_dim = embedding_dim
+#         self.projection = nn.Linear(self.model.config.hidden_size, embedding_dim)
+    
+#     def forward(self, batch_sentences : list[Sentence]):
+#         """
+#         Args:
+#             batch_sentences (list[Sentence]): A batch of sentences
+#         Returns:
+#             torch.Tensor: A tensor of shape (batch_size, sequence_length, embedding_dim) cotaining word-level embeddings
+#         """
+#         device = next(self.parameters()).device
+        
+#         # Extract words from sentences
+#         batch_word_sentences = [sentence.symbols for sentence in batch_sentences]
+        
+#         # Get the actual number of words in each sentence
+#         actual_word_counts = [len(words) for words in batch_word_sentences]
+#         max_words_in_batch = max(actual_word_counts)
+        
+        
+#         # Tokenize with word alignment tracking
+#         encoded_inputs = self.tokenizer(
+#             batch_word_sentences,
+#             return_tensors='tf',
+#             padding=True,
+#             truncation=True,
+#             is_split_into_words=True,  # This is key for word alignment
+#             return_offsets_mapping=False,
+#         )
+        
+#         # Get word_ids for each tokenized sequence
+#         word_ids_batch = []
+#         for i in range(len(batch_word_sentences)):
+#             word_ids = encoded_inputs.word_ids(batch_index=i)
+#             word_ids_batch.append([w if w is not None else -1 for w in word_ids])
+        
+#         # Forward pass through BERT
+#         with torch.no_grad():
+#             outputs = self.model(**encoded_inputs)
+#             # Convert TensorFlow tensor to PyTorch
+#             last_hidden_states = torch.from_numpy(outputs.last_hidden_state.numpy()).to(device)
+        
+#         # Aggregate token embeddings to word embeddings
+#         word_embeddings_batch = []
+        
+#         for batch_idx, word_ids in enumerate(word_ids_batch):
+#             num_words = actual_word_counts[batch_idx]
+            
+#             # Initialize word embeddings for this sentence (only for actual words)
+#             word_embeddings = torch.zeros(num_words, last_hidden_states.size(-1), device=device)
+#             word_token_counts = torch.zeros(num_words, device=device)
+            
+#             # Aggregate tokens for each word
+#             for token_idx, word_id in enumerate(word_ids):
+#                 if word_id >= 0 and word_id < num_words:  # Valid word ID within sentence
+#                     word_embeddings[word_id] += last_hidden_states[batch_idx, token_idx]
+#                     word_token_counts[word_id] += 1
+            
+#             # Average the embeddings (avoid division by zero)
+#             word_token_counts = torch.clamp(word_token_counts, min=1)
+#             word_embeddings = word_embeddings / word_token_counts.unsqueeze(-1)
+            
+#             word_embeddings_batch.append(word_embeddings)
+        
+#         # Pad to max_words_in_batch and stack
+#         padded_embeddings = []
+        
+#         for word_embs in word_embeddings_batch:
+#             current_words = word_embs.size(0)
+#             if current_words < max_words_in_batch:
+#                 # Pad with zeros to reach max_words_in_batch
+#                 padding_size = max_words_in_batch - current_words
+#                 padding = torch.zeros(padding_size, word_embs.size(-1), device=device)
+#                 word_embs = torch.cat([word_embs, padding], dim=0)
+#             padded_embeddings.append(word_embs)
+        
+#         # Stack into batch tensor: (batch_size, max_words_in_batch, hidden_size)
+#         batch_word_embeddings = torch.stack(padded_embeddings, dim=0)
+        
+#         # Project to desired embedding dimension
+#         projected_embeddings = self.projection(batch_word_embeddings)
+        
+#         return projected_embeddings
+
+    
+class BertWordEmbedder(nn.Module):
     def __init__(self, embedding_dim, model_name='bert-base-cased'):
         super().__init__()
         self.tokenizer = BertTokenizerFast.from_pretrained(model_name)
-        self.model = TFBertModel.from_pretrained(model_name)
+        self.model = BertModel.from_pretrained(model_name)  # PyTorch version
         self.embedding_dim = embedding_dim
         self.projection = nn.Linear(self.model.config.hidden_size, embedding_dim)
     
-    def forward(self, batch_sentences : list[Sentence]):
+    def forward(self, batch_sentences: list["Sentence"]):
         """
         Args:
             batch_sentences (list[Sentence]): A batch of sentences
         Returns:
-            torch.Tensor: A tensor of shape (batch_size, sequence_length, embedding_dim) cotaining word-level embeddings
+            torch.Tensor: A tensor of shape (batch_size, sequence_length, embedding_dim)
         """
         device = next(self.parameters()).device
-        
+
         # Extract words from sentences
         batch_word_sentences = [sentence.symbols for sentence in batch_sentences]
-        
+
         # Get the actual number of words in each sentence
         actual_word_counts = [len(words) for words in batch_word_sentences]
         max_words_in_batch = max(actual_word_counts)
-        
-        
+
         # Tokenize with word alignment tracking
         encoded_inputs = self.tokenizer(
             batch_word_sentences,
-            return_tensors='tf',
+            return_tensors='pt',  # <- Changed from 'tf' to 'pt'
             padding=True,
             truncation=True,
-            is_split_into_words=True,  # This is key for word alignment
+            is_split_into_words=True,
             return_offsets_mapping=False,
-        )
-        
+        ).to(device)  # <- Send to the same device as model
+
         # Get word_ids for each tokenized sequence
         word_ids_batch = []
         for i in range(len(batch_word_sentences)):
             word_ids = encoded_inputs.word_ids(batch_index=i)
             word_ids_batch.append([w if w is not None else -1 for w in word_ids])
-        
-        # Forward pass through BERT
+
+        # Forward pass through BERT (PyTorch version)
         with torch.no_grad():
             outputs = self.model(**encoded_inputs)
-            # Convert TensorFlow tensor to PyTorch
-            last_hidden_states = torch.from_numpy(outputs.last_hidden_state.numpy()).to(device)
-        
+            last_hidden_states = outputs.last_hidden_state  # already a PyTorch tensor on correct device
+
         # Aggregate token embeddings to word embeddings
         word_embeddings_batch = []
-        
+
         for batch_idx, word_ids in enumerate(word_ids_batch):
             num_words = actual_word_counts[batch_idx]
-            
-            # Initialize word embeddings for this sentence (only for actual words)
+
+            # Initialize word embeddings for this sentence
             word_embeddings = torch.zeros(num_words, last_hidden_states.size(-1), device=device)
             word_token_counts = torch.zeros(num_words, device=device)
-            
+
             # Aggregate tokens for each word
             for token_idx, word_id in enumerate(word_ids):
-                if word_id >= 0 and word_id < num_words:  # Valid word ID within sentence
+                if 0 <= word_id < num_words:
                     word_embeddings[word_id] += last_hidden_states[batch_idx, token_idx]
                     word_token_counts[word_id] += 1
-            
-            # Average the embeddings (avoid division by zero)
+
             word_token_counts = torch.clamp(word_token_counts, min=1)
             word_embeddings = word_embeddings / word_token_counts.unsqueeze(-1)
-            
+
             word_embeddings_batch.append(word_embeddings)
-        
+
         # Pad to max_words_in_batch and stack
         padded_embeddings = []
-        
         for word_embs in word_embeddings_batch:
             current_words = word_embs.size(0)
             if current_words < max_words_in_batch:
-                # Pad with zeros to reach max_words_in_batch
                 padding_size = max_words_in_batch - current_words
                 padding = torch.zeros(padding_size, word_embs.size(-1), device=device)
                 word_embs = torch.cat([word_embs, padding], dim=0)
             padded_embeddings.append(word_embs)
-        
-        # Stack into batch tensor: (batch_size, max_words_in_batch, hidden_size)
+
         batch_word_embeddings = torch.stack(padded_embeddings, dim=0)
-        
+
         # Project to desired embedding dimension
         projected_embeddings = self.projection(batch_word_embeddings)
-        
+
         return projected_embeddings
     
 class TagEmbedder(nn.Module):
