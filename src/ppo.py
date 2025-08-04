@@ -114,6 +114,7 @@ class PPOConfig:
 
     # Miscellaneous parameters
     save_freq: int = 20  # How often we save in number of iterations
+    eval_freq: int = 5  # How often we evaluate the model in number of training iterations
     seed: int = 0  # Sets the seed of our program, used for reproducibility of results
     min_ep_rews_threshold: float = 0.  # Minimum episodic rewards threshold to log the grammar
 
@@ -333,7 +334,8 @@ class PPO:
                 self.logger['sym_entropy'].append(sym_dist_entropy.mean().item())
 
             # Print a summary of our training so far
-            self._log_summary()
+            if i_so_far % self.config.eval_freq == 0:
+                self._log_summary()
 
             # Save our model if it's time
             if i_so_far % self.config.save_freq == 0:
