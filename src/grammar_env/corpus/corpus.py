@@ -70,6 +70,7 @@ class Corpus:
     max_vocab_size: Optional[int] = None
     vocab_size: int = field(init=False)
     max_len: Optional[int] = 40000
+    multiprocessing : bool = True
 
     sentences: list[Sentence] = field(init=False)
     symbol_count: list[tuple[str, int]] = field(init=False)
@@ -95,8 +96,11 @@ class Corpus:
     def _initialize_sentences(self) -> None:
         with open(self.ptb_path, 'r') as file:
             lines = file.readlines()
-        with ProcessPoolExecutor(max_workers=4) as executor:
-            all_sentences = list(executor.map(Sentence, lines))
+        if self.multiprocessing:
+            with ProcessPoolExecutor(max_workers=4) as executor:
+                all_sentences = list(executor.map(Sentence, lines))
+        else:
+            all_sentences = list(map(Sentence, lines))
 
         # Filter sentences based on length criteria.
         self.sentences = []

@@ -26,9 +26,9 @@ def train(name: str, persistent_dir: Path, args: argparse.Namespace, ppo_config:
     logger.info(f"Training name: {name}, persistent_dir: {persistent_dir} with args: {args}")
 
     train_corpus: Corpus = Corpus(
-        str(args.directory / TRAIN_DATASET_FILENAME), max_vocab_size=args.max_vocab_size, max_len=args.max_len, max_sentence_length=60
+        str(args.directory / TRAIN_DATASET_FILENAME), max_vocab_size=args.max_vocab_size, max_len=args.max_len, max_sentence_length=60, multiprocessing=not args.no_multiprocess
     )
-    valid_corpus: Corpus = Corpus(str(args.directory / VALID_DATASET_FILENAME))
+    valid_corpus: Corpus = Corpus(str(args.directory / VALID_DATASET_FILENAME), multiprocessing=not args.no_multiprocess)
     train_corpus._initialize_symbol_idx()
     # train and valid corpus must use the same symbol_to_idx and idx_to_symbol for the correct results
     valid_corpus.symbol_to_idx = train_corpus.symbol_to_idx
@@ -57,6 +57,8 @@ if __name__ == '__main__':
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--max_vocab_size", type=int, default=10000)
     parser.add_argument("--max_len", type=int)
+    parser.add_argument("--no_multiprocess", action='store_true',
+                        help="Disable multiprocessing for corpus initialization")
     parser.add_argument("--timesteps", type=int, default=int(1e7))
     parser.add_argument("--device", type=str, default="cuda:0")
 
