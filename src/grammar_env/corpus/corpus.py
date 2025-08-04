@@ -94,24 +94,35 @@ class Corpus:
         logger.info(f"Part-of-speech frequencies : {self.pt_freq}")
 
     def _initialize_sentences(self) -> None:
-        with open(self.ptb_path, 'r') as file:
-            lines = file.readlines()
+        self.sentences = []
+        
         if self.multiprocessing:
+            with open(self.ptb_path, 'r') as file:
+                lines = file.readlines()
             with ProcessPoolExecutor(max_workers=4) as executor:
                 all_sentences = list(executor.map(Sentence, lines))
-        else:
-            all_sentences = list(map(Sentence, lines))
 
-        # Filter sentences based on length criteria.
-        self.sentences = []
-        for sentence in all_sentences:
-            if self.min_sentence_length is not None and len(sentence) < self.min_sentence_length:
-                continue
-            if self.max_sentence_length is not None and len(sentence) > self.max_sentence_length:
-                continue
-            self.sentences.append(sentence)
-        if self.max_len is not None:
-            self.sentences = self.sentences[:self.max_len]
+            # Filter sentences based on length criteria.
+            for sentence in all_sentences:
+                if self.min_sentence_length is not None and len(sentence) < self.min_sentence_length:
+                    continue
+                if self.max_sentence_length is not None and len(sentence) > self.max_sentence_length:
+                    continue
+                self.sentences.append(sentence)
+            if self.max_len is not None:
+                self.sentences = self.sentences[:self.max_len]
+
+        else:
+            with open(self.ptb_path, 'r') as file:
+                for line in file:
+                    sentence = Sentence(line)
+                    if self.min_sentence_length is not None and len(sentence) < self.min_sentence_length:
+                        continue
+                    if self.max_sentence_length is not None and len(sentence) > self.max_sentence_length:
+                        continue
+                    self.sentences.append(sentence)
+                    if self.max_len is not None and len(self.sentences) >= self.max_len:
+                        break
 
     def _initialize_symbol_idx(self) -> None:
         symbols_count: defaultdict[str, int] = defaultdict(int)
