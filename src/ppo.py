@@ -412,7 +412,7 @@ class PPO:
                 'simulation_pos_entropy': global_pos_entropy,
                 'simulation_sym_entropy': global_sym_entropy,
 
-            }, commit=True
+            }, commit=False
         )
 
         self.result_saver.save(
