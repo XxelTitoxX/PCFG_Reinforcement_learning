@@ -114,7 +114,7 @@ class PPOConfig:
 
     # Miscellaneous parameters
     save_freq: int = 20  # How often we save in number of iterations
-    eval_freq: int = 5  # How often we evaluate the model in number of training iterations
+    eval_freq: int = 10  # How often we evaluate the model in number of training iterations
     seed: int = 0  # Sets the seed of our program, used for reproducibility of results
     min_ep_rews_threshold: float = 0.  # Minimum episodic rewards threshold to log the grammar
 
