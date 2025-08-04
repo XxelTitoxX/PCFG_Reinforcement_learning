@@ -19,7 +19,7 @@ VALID_DATASET_FILENAME: str = "ptb-valid.txt"
 
 
 def datetime_tag() -> str:
-    return datetime.datetime.now().strftime("%m%d_%H:%M:%S")
+    return datetime.datetime.now().strftime("%m%d_%H-%M-%S")
 
 
 def train(name: str, persistent_dir: Path, args: argparse.Namespace, ppo_config: PPOConfig) -> None:
@@ -105,7 +105,7 @@ if __name__ == '__main__':
     sh: logging.StreamHandler = logging.StreamHandler()
     logging.basicConfig(
         format="%(asctime)s [%(levelname)s] %(name)s -- %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
+        datefmt="%m/%d/%Y %H-%M-%S",
         level=logging.INFO,
         handlers=[fh, sh]
     )
