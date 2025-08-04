@@ -5,3 +5,4 @@ numba
 jsbeautifier
 dataclasses-json
 wandb
+transformers
