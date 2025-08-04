@@ -93,14 +93,14 @@ class ActorCritic(nn.Module):
         assert self.n_layer > 0, f"n_layer must be greater than 0, got {self.n_layer}"
         assert self.embedding_dim > 0, f"embedding_dim must be greater than 0, got {self.embedding_dim}"
 
-        self.tag_embedder: TagEmbedder = TagEmbedder(tag_dim=state_dim, embedding_dim=64)
+        self.tag_embedder: TagEmbedder = TagEmbedder(tag_dim=state_dim, embedding_dim=embedding_dim)
         #self.word_embedder: IndexWordEmbedder = IndexWordEmbedder(vocab_size=vocab_size, embedding_dim=embedding_dim)
         self.word_embedder: BertWordEmbedder = BertWordEmbedder(embedding_dim=embedding_dim)
         self.word_tag_embedder: WordTagEmbedder = WordTagEmbedder(
             word_embedder=self.word_embedder, tag_embedder=self.tag_embedder, embedding_dim=embedding_dim, num_nt=action_dim
         )
         self.induction_embedder: InductionEmbedder = InductionEmbedder(tag_embedding_dim=64,
-            embedding_dim=embedding_dim, no_tag=False
+            embedding_dim=embedding_dim, n_layer=n_layer, no_tag=False
         )
         self.transformer_layer: ConvEncoderLayer = ConvEncoderLayer(embedding_dim=embedding_dim, num_layers=n_layer)
         #self.transformer_layer: TransformerLayer = TransformerLayer(embedding_dim=embedding_dim, num_layers=n_layer, num_heads=num_heads, dropout=0.1)

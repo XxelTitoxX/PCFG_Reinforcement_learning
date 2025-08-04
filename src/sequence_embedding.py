@@ -465,24 +465,22 @@ class WordTagEmbedder(nn.Module):
 
 
 class InductionEmbedder(nn.Module):
-    def __init__(self, tag_embedding_dim:int, embedding_dim:int, no_tag:bool=False):
+    def __init__(self, tag_embedding_dim:int, embedding_dim:int, n_layer:int, no_tag:bool=False):
         super(InductionEmbedder, self).__init__()
         self.embedding_dim = embedding_dim
         self.tag_embedding_dim = tag_embedding_dim
         self.dropout_prob = 0.5
         self.no_tag = no_tag
         if no_tag:
-            self.mlp = nn.Sequential(
-                nn.Linear(2*embedding_dim, 2*embedding_dim),
-                nn.ReLU(),
-                nn.Linear(2*embedding_dim, embedding_dim)
-            )
+            input_dim = 2 * embedding_dim
         else:
-            self.mlp = nn.Sequential(
-                nn.Linear(2*embedding_dim + tag_embedding_dim, 2*embedding_dim + tag_embedding_dim),
-                nn.ReLU(),
-                nn.Linear(2*embedding_dim + tag_embedding_dim, embedding_dim)
-            )
+            input_dim = 2 * embedding_dim + tag_embedding_dim
+        layers = []
+        for _ in range(n_layer - 1):
+            layers.append(nn.Linear(input_dim, input_dim))
+            layers.append(nn.ReLU())  # Optionally add activation here
+        layers.append(nn.Linear(input_dim, embedding_dim))
+        self.mlp = nn.Sequential(*layers)
         
     def forward(self, tag_embeddings: torch.Tensor, left_embeddings: torch.Tensor, right_embeddings: torch.Tensor, dropout:bool=False):
         """
