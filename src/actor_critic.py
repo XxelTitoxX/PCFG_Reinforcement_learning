@@ -99,7 +99,7 @@ class ActorCritic(nn.Module):
         self.word_tag_embedder: WordTagEmbedder = WordTagEmbedder(
             word_embedder=self.word_embedder, tag_embedder=self.tag_embedder, embedding_dim=embedding_dim, num_nt=action_dim
         )
-        self.induction_embedder: InductionEmbedder = InductionEmbedder(tag_embedding_dim=64,
+        self.induction_embedder: InductionEmbedder = InductionEmbedder(tag_embedding_dim=embedding_dim,
             embedding_dim=embedding_dim, n_layer=n_layer, no_tag=False
         )
         self.transformer_layer: ConvEncoderLayer = ConvEncoderLayer(embedding_dim=embedding_dim, num_layers=n_layer)
