@@ -113,7 +113,7 @@ class PPOConfig:
     max_num_steps: int = 70  # Maximum number of steps to run in the environment
 
     # Miscellaneous parameters
-    save_freq: int = 20  # How often we save in number of iterations
+    save_freq: int = 20000  # How often we save in number of iterations
     eval_freq: int = 10  # How often we evaluate the model in number of training iterations
     seed: int = 0  # Sets the seed of our program, used for reproducibility of results
     min_ep_rews_threshold: float = 0.  # Minimum episodic rewards threshold to log the grammar
