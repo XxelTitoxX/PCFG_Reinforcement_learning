@@ -1,5 +1,6 @@
 import torch
-
+from pathlib import Path
+from typing import Optional
 
 from grammar_env.criterion.criterion import Criterion
 from env import Environment
@@ -25,10 +26,10 @@ def f1_score(
 
 class F1Criterion(Criterion):
     def __init__(
-            self, device: torch.device,
+            self, device: torch.device, persistent_dir: Optional[Path] = None
     ):
         super().__init__(
-            device
+            device, persistent_dir
         )
 
     def score_sentences(
@@ -42,14 +43,13 @@ class F1Criterion(Criterion):
             whole_span: tuple[int, int] = (0, s_len - 1)
             f1_scores.append(f1_score(gt_spans, s_pred_spans, whole_span))
         f1_scores = torch.tensor(f1_scores, device=self.device)
-        self.update_score(f1_scores)
         return f1_scores
     
 class LabelledF1Criterion(Criterion):
     def __init__(
-            self, device: torch.device,
+            self, device: torch.device, persistent_dir: Optional[Path] = None
     ):
-        super().__init__(device)
+        super().__init__(device, persistent_dir)
 
     def score_sentences(
             self, env : Environment
@@ -64,5 +64,5 @@ class LabelledF1Criterion(Criterion):
             s_pred_spans = set((span[0], span[1], sym) for span, sym in s_pred_spans.items() if span != whole_span)
             f1_scores.append(f1_score(gt_spans, s_pred_spans, whole_span))
         f1_scores = torch.tensor(f1_scores, device=self.device)
-        self.update_score(f1_scores)
+        self.update_score(f1_scores.mean().item())
         return f1_scores

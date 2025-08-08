@@ -1,9 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Optional, final
+from typing import final
 
 import torch
-
-from actor_critic import ActorCritic
 
 __all__ = ['Criterion']
 
@@ -14,42 +12,28 @@ class Criterion(ABC):
             self, device: torch.device
     ):
         self.device: torch.device = device
-
-        self.opt_model: Optional[ActorCritic] = None
-        """
-        The PCFG with the highest score.
-        If multiple PCFGs have the same score, the one that is scored last is selected.
-        """
         self.opt_score: float = float("-inf")
         """
-        Score of the optimal PCFG.
-        i.e., the highest score.
+        Highest score achieved on a batch of sentences.
         """
         self.last_score: float = float("-inf")
+        """
+        Score achieved on the last batch of sentences.
+        """
 
     @abstractmethod
     def score_sentences(
             self, env
     ) -> torch.Tensor:
         """
-        Score of sentences given the PCFG.
-        Score given an empty PCFG is 0.
-        :param binary_grammar: Binary part of the PCFG
-        :param unary_grammar: Unary part of the PCFG
-        :param sentence_indexes: torch.Tensor of shape (batch_size,),
-                                indexes of the sentences (in the corpus)
-        :param sentences: torch.Tensor of shape (batch_size, max_sentence_length)
-        :param sentence_lengths: torch.Tensor of shape (batch_size,)
+        Score of the bottom-up parsing of the batch of sentences in the environment.
+        :param env: Environment with sentences to score.
         """
         pass
 
     @final
-    def update_score(self, scores : torch.Tensor):
-        self.last_score = torch.mean(scores).item()
+    def update_score(self, score : float):
+        self.last_score = score
         if self.last_score > self.opt_score:
             self.opt_score = self.last_score
 
-    def update_optimal_model(
-            self, model: ActorCritic):
-        if self.last_score == self.opt_score:
-            self.opt_model = model.copy()

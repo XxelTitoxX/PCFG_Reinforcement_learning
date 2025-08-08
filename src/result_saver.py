@@ -61,6 +61,14 @@ class ResultSaver:
         self.train_env: Environment = Environment(max_num_steps, 0.0, device)
         self.valid_env: Environment = Environment(max_num_steps, 0.0, device)
 
+    def save_opt_model(self, model: ActorCritic):
+        path: Path = self.persistent_dir / "torch" / f"actor_critic_bsf.pth"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            model.state_dict(),
+            str(path)
+        )
+
     def save(
             self, name: str, i_so_far: int, actor_critic: ActorCritic,
             commit: bool
@@ -85,6 +93,8 @@ class ResultSaver:
             self.valid_env.rollout(actor_critic, valid_sentences, evaluate=True)
             train_f1: float = torch.mean(self.train_f1_criterion.score_sentences(self.train_env)).item()
             valid_f1: float = torch.mean(self.valid_f1_criterion.score_sentences(self.valid_env)).item()
+            if valid_f1 >= self.valid_f1_criterion.opt_score:
+                self.save_opt_model(actor_critic)
 
             train_labelled_f1: float = torch.mean(self.train_labelled_f1_criterion.score_sentences(self.train_env)).item()
             valid_labelled_f1: float = torch.mean(self.valid_labelled_f1_criterion.score_sentences(self.valid_env)).item()

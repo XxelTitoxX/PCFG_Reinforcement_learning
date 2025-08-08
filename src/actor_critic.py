@@ -94,8 +94,8 @@ class ActorCritic(nn.Module):
         assert self.embedding_dim > 0, f"embedding_dim must be greater than 0, got {self.embedding_dim}"
 
         self.tag_embedder: TagEmbedder = TagEmbedder(tag_dim=state_dim, embedding_dim=embedding_dim)
-        #self.word_embedder: IndexWordEmbedder = IndexWordEmbedder(vocab_size=vocab_size, embedding_dim=embedding_dim)
-        self.word_embedder: BertWordEmbedder = BertWordEmbedder(embedding_dim=embedding_dim)
+        self.word_embedder: IndexWordEmbedder = IndexWordEmbedder(vocab_size=vocab_size, embedding_dim=embedding_dim)
+        #self.word_embedder: BertWordEmbedder = BertWordEmbedder(embedding_dim=embedding_dim)
         self.word_tag_embedder: WordTagEmbedder = WordTagEmbedder(
             word_embedder=self.word_embedder, tag_embedder=self.tag_embedder, embedding_dim=embedding_dim, num_nt=action_dim
         )

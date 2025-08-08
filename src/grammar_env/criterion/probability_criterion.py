@@ -1,6 +1,8 @@
 from logging import getLogger
 
 import torch
+from typing import Optional
+from pathlib import Path
 
 from grammar_env.criterion.criterion import Criterion
 from env import Environment
@@ -12,10 +14,10 @@ logger = getLogger(__name__)
 
 class ProbabilityCriterion(Criterion):
     def __init__(
-            self, device: torch.device
+            self, device: torch.device, persistent_dir: Optional[Path] = None
     ):
         super().__init__(
-            device
+            device, persistent_dir
         )
 
     def score_sentences(
@@ -30,5 +32,5 @@ class ProbabilityCriterion(Criterion):
         not_parsed_probs[~env.done] = float('-inf')
         sentence_parsing_log_probs = torch.sum(log_probs, dim=1) + not_parsed_probs
         parsing_probs = torch.exp(sentence_parsing_log_probs)
-        self.update_score(parsing_probs)
+        self.update_score(parsing_probs.mean().item())
         return parsing_probs

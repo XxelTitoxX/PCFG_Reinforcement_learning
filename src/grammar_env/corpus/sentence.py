@@ -11,8 +11,8 @@ __all__ = ['GoldSpan', 'Sentence']
 
 logger = getLogger(__name__)
 
-DATASET = 'ptb'
-#DATASET = 'toy_grammar'
+#DATASET = 'ptb'
+DATASET = 'toy_grammar'
 
 POS_CLUSTER: dict[str, str] = {
             "CC": "CC",
