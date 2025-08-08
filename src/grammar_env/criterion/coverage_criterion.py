@@ -10,10 +10,10 @@ __all__ = ['CoverageCriterion']
 
 class CoverageCriterion(Criterion):
     def __init__(
-            self, device: torch.device, persistent_dir: Optional[Path] = None
+            self, device: torch.device
     ):
         super().__init__(
-            device, persistent_dir
+            device
         )
 
     def score_sentences(

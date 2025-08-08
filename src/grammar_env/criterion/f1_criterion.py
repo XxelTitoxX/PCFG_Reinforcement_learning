@@ -26,10 +26,10 @@ def f1_score(
 
 class F1Criterion(Criterion):
     def __init__(
-            self, device: torch.device, persistent_dir: Optional[Path] = None
+            self, device: torch.device
     ):
         super().__init__(
-            device, persistent_dir
+            device
         )
 
     def score_sentences(
@@ -47,9 +47,9 @@ class F1Criterion(Criterion):
     
 class LabelledF1Criterion(Criterion):
     def __init__(
-            self, device: torch.device, persistent_dir: Optional[Path] = None
+            self, device: torch.device
     ):
-        super().__init__(device, persistent_dir)
+        super().__init__(device)
 
     def score_sentences(
             self, env : Environment
