@@ -145,7 +145,7 @@ def save_sentences(strings:list[str], save_dir:str) -> None:
 
 class CFG:
     def __init__(self, n_non_terminals:int, n_pre_terminals:int, n_terminals:int, n_nary_rules:int, max_pt_per_terminal:int=1, ambiguity_prob=0.0, max_unary_rules:Optional[int]=None, value_of_nt:int = 2, max_value_per_rhs:int = 7, unary_rules:Optional[np.ndarray]=None, nary_rules:Optional[np.ndarray]=None, min_nt_value:Optional[np.ndarray]=None, min_rule_value:Optional[np.ndarray]=None):
-        assert n_non_terminals > 0 and n_pre_terminals > 0 and n_terminals > n_pre_terminals and n_nary_rules > 0 and max_pt_per_terminal > 0 and ambiguity_prob >= 0.0 and ambiguity_prob <= 1.0 and value_of_nt > 1 and max_value_per_rhs > 0, \
+        assert n_non_terminals > 0 and n_pre_terminals > 0 and n_terminals > n_pre_terminals and n_nary_rules > 0 and max_pt_per_terminal > 0 and ambiguity_prob >= 0.0 and ambiguity_prob <= 1.0 and value_of_nt >= 1.0 and max_value_per_rhs > 0, \
             "Incorrect parameters"
         if max_unary_rules is not None:
             assert max_unary_rules >= n_terminals, "max_unary_rules must be greater than n_terminals"
