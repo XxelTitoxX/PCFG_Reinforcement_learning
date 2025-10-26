@@ -6,6 +6,7 @@ from actor_critic import ActorCritic
 from grammar_env.corpus.sentence import Sentence
 from n_gram import NGram
 import time
+from enum import Enum
 
 logger = getLogger(__name__)
 
@@ -15,6 +16,30 @@ IDX_TO_NT_TAG = {
     18: 'SINV', 19: 'SQ', 20: 'UCP', 21: 'VP', 22: 'WHADJP', 23: 'WHADVP', 24: 'WHNP', 25: 'WHPP'
 }
 
+class UpdateMode(Enum):
+    ACTION = 0
+    GT_POS = 1
+    GT_POS_DEFAULT_SYM = 2
+    GT_POS_GT_SYM = 3
+    BEST_SYM = 4
+
+
+def highlight_list_element(lst, index : int, additional_index: Optional[int] = None):
+    if index < 0 or index >= len(lst):
+        raise IndexError("Index out of range.")
+    color='\033[31m'
+    second_color='\033[32m'
+    reset='\033[0m'
+    # Build string representation
+    parts = []
+    for i, x in enumerate(lst):
+        if i == index:
+            parts.append(f"{color}{x}{reset}")  # highlight
+        elif i == additional_index:
+            parts.append(f"{second_color}{x}{reset}")  # highlight
+        else:
+            parts.append(str(x))
+    print("[ " + ", ".join(parts) + " ]")
 
 def min_padding(x: torch.Tensor):
     # x is a 2D tensor containing a batch of sentences with -1 as padding
@@ -106,25 +131,28 @@ class Environment:
         self.max_num_steps = max_num_steps
         self.success_weight = success_weight
 
-        self.state : torch.Tensor = None
-        self.spans_sentences: torch.Tensor = None
-        self.spans_lists: list[list[tuple[int, int]]] = None
-        self.sentence_lengths: torch.Tensor = None
+        self.state : torch.Tensor = None # (batch_size, max_seq_len, embedding_dim)
+        self.spans_sentences: torch.Tensor = None # (batch_size, max_seq_len, 2) list of spans associated with current constituents
+        self.spans_lists: list[dict[tuple[int, int], int]] = None # (batch_size, DICT) list of dicts mapping spans to symbols for each sentence in the batch
+        self.sentence_lengths: torch.Tensor = None # (batch_size,)
 
-        self.action_positions : torch.Tensor = None
-        self.positions_log_probs : torch.Tensor = None
-        self.action_symbols : torch.Tensor = None
-        self.symbols_log_probs : torch.Tensor = None
-        self.update_positions : torch.Tensor = None
-        self.update_symbols : torch.Tensor = None
-        self.rew : torch.Tensor = None
-        self.sym_rew : torch.Tensor = None
-        self.state_val: torch.Tensor = None
+        self.action_positions : torch.Tensor = None # (batch_size, max_num_steps) with padding -1
+        self.positions_log_probs : torch.Tensor = None # (batch_size, max_num_steps) with padding -inf
+        self.action_symbols : torch.Tensor = None # (batch_size, max_num_steps) with padding -1
+        self.symbols_log_probs : torch.Tensor = None # (batch_size, max_num_steps) with padding -inf
+        self.update_positions : torch.Tensor = None # (batch_size, max_num_steps) with padding -1
+        self.update_symbols : torch.Tensor = None # (batch_size, max_num_steps) with padding -1
+        self.rew : torch.Tensor = None # (batch_size, max_num_steps) with padding 0
+        self.sym_rew : torch.Tensor = None # (batch_size, max_num_steps) with padding 0
+        self.state_val: torch.Tensor = None # (batch_size, max_num_steps) with padding 0.0
 
         self.step_count : int = 0
         self.done : torch.Tensor = None
         self.ep_len : torch.Tensor = None
         self.cls_tokens: Optional[torch.Tensor] = None
+
+        self.update_mode: UpdateMode = UpdateMode.ACTION
+        self.verbose: bool = True
 
     def reset(self, batch_sentences: list[Sentence], batch_s_embeddings: torch.Tensor):
         self.num_episodes = len(batch_sentences)
@@ -173,6 +201,33 @@ class Environment:
         assert (~done & self.done).sum() == 0, f"Some episodes marked as done but do not qulify as such"
         self.done = done
         self.ep_len[done] = torch.minimum(self.ep_len[done], torch.tensor(self.step_count, device=self.device))
+
+    def print_parse(self, current_spans: torch.Tensor, current_mask: torch.Tensor):
+        not_done_idx = torch.arange(self.num_episodes, device=self.device)[~self.done]
+        print_idx = not_done_idx[0] # Just print the first sentence in the batch
+
+        initial_spans = current_spans[0]
+        initial_mask = current_mask[0]
+
+        pos_action = self.action_positions[print_idx, self.step_count].item()
+        sym_action = self.action_symbols[print_idx, self.step_count].item()
+        update_pos = self.update_positions[print_idx, self.step_count].item()
+        update_sym = self.update_symbols[print_idx, self.step_count].item()
+        pos_rew = self.rew[print_idx, self.step_count].item()
+        sym_rew = self.sym_rew[print_idx, self.step_count].item()
+
+        final_spans = self.spans_sentences[print_idx]
+
+        print("\nInitial spans:\n")
+        highlight_list_element(initial_spans[initial_mask].tolist(), pos_action, additional_index=update_pos)
+        print(f"\nAction position: {pos_action}, Action symbol: {sym_action}, Update position: {update_pos}, Update symbol: {update_sym}\n")
+        print(f"Position reward: {pos_rew}, Symbol reward: {sym_rew}\n")
+        print(self.gt_spans[print_idx])
+        print("Final spans:\n")
+        highlight_list_element(final_spans[final_spans[:,0]!=-1].tolist(), pos_action)
+
+
+
 
     def step(self, action_positions: torch.Tensor, positions_log_probs: torch.Tensor, action_symbols: torch.Tensor, symbols_log_probs: torch.Tensor, update_positions: torch.Tensor, update_symbols: torch.Tensor, state_value: torch.Tensor, args: dict = None, evaluate: bool = False):
         new_constituents, drp_new_constituents = args["new_constituent"], args["drp_new_constituent"]
@@ -225,7 +280,8 @@ class Environment:
             '''
             #self.cls_tokens[not_done] = cls_token
 
-
+        if self.verbose:
+            self.print_parse(current_spans, current_mask)
         self.step_count += 1
         self.check_done()
 
@@ -511,7 +567,27 @@ class Environment:
                 torch.tensor(mask_after, dtype=torch.bool, device=self.device), \
     
 
-    def rollout(self, actor_critic: ActorCritic, batch_sentences: list[Sentence], evaluate: bool = False, supervised_update:bool = False):
+    def get_update_pos_sym(self, position_action: torch.Tensor, symbol_action: torch.Tensor, gt_position: torch.Tensor, gt_symbol: torch.Tensor):
+        if self.update_mode == UpdateMode.ACTION:
+            return position_action, symbol_action
+        elif self.update_mode == UpdateMode.GT_POS:
+            return gt_position, symbol_action
+        elif self.update_mode == UpdateMode.GT_POS_DEFAULT_SYM:
+            return gt_position, torch.zeros_like(symbol_action, dtype=torch.int32, device=self.device)
+        elif self.update_mode == UpdateMode.GT_POS_GT_SYM:
+            return gt_position, gt_symbol
+        elif self.update_mode == UpdateMode.BEST_SYM:
+            _, not_done = self.get_state()
+            current_spans_sentences = self.spans_sentences[not_done]
+            not_done_range = torch.arange(not_done.sum().item(), device=self.device)
+            action_spans = torch.stack([current_spans_sentences[not_done_range, position_action, 0], current_spans_sentences[not_done_range, position_action + 1, 1]], dim=1)
+            update_symbol = self.supervised_update_sym(not_done, action_spans)
+            return position_action, update_symbol
+        raise ValueError(f"Unknown update mode: {self.update_mode}")
+
+
+
+    def rollout(self, actor_critic: ActorCritic, batch_sentences: list[Sentence], evaluate: bool = False):
         """
         Collect batch of data from simulation.
         As PPO is an on-policy algorithm, we need to collect a fresh batch
@@ -537,22 +613,17 @@ class Environment:
         # Run an episode for max_timesteps_per_episode timesteps
         ep_t: int = 0
         for ep_t in range(self.max_num_steps):
-            if supervised_update:
+            if self.update_mode in {UpdateMode.GT_POS, UpdateMode.GT_POS_DEFAULT_SYM, UpdateMode.GT_POS_GT_SYM}:
                 gt_pos, gt_sym, gt_new_spans = self.gt_pos_sym_span() # Supervised span and symbol
             else:
                 gt_pos, gt_sym, gt_new_spans = None, None, None
             current_states, not_done = self.get_state()
             not_done_range = torch.arange(not_done.sum().item(), device=self.device)
-            position, position_log_prob, symbol, symbol_log_prob, state_value = actor_critic.act(current_states, self.get_mask()[not_done], max_prob=evaluate, gt_positions=gt_pos)
+            position, position_log_prob, symbol, symbol_log_prob, state_value = actor_critic.act(current_states, self.get_mask()[not_done], position_update=gt_pos)
             #cls_token = actor_critic.get_cls_token(current_states, self.get_mask()[not_done])
             assert position.shape == position_log_prob.shape == symbol.shape == symbol_log_prob.shape == state_value.shape == (not_done.sum().item(),), f"Shape mismatch: {position.shape}, {position_log_prob.shape}, {symbol.shape}, {symbol_log_prob.shape}, {state_value.shape}, {(not_done.sum().item(),)}"
 
-            current_spans_sentences = self.spans_sentences[not_done]
-            action_spans = torch.stack([current_spans_sentences[not_done_range, position, 0], current_spans_sentences[not_done_range, position + 1, 1]], dim=1)
-            #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, self.supervised_update_sym(not_done, action_spans))
-            #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, torch.zeros_like(symbol, dtype=torch.int32, device=self.device))
-            #update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (gt_pos, symbol)
-            update_position, update_symbol = (gt_pos, gt_sym) if supervised_update else (position, symbol)
+            update_position, update_symbol = self.get_update_pos_sym(position, symbol, gt_pos, gt_sym)
 
             # Compute new constituents embeddings
             left = current_states[not_done_range, update_position, :]
@@ -574,7 +645,6 @@ class Environment:
         #last_cls_token = actor_critic.get_cls_token(self.state, self.get_mask())
         #self.rew[torch.arange(self.num_episodes, device=self.device), self.ep_len-1] = self.reward_cossim_cls(torch.ones((self.num_episodes,), dtype=torch.bool, device=self.device), last_cls_token)
         #self.sym_rew[torch.arange(self.num_episodes, device=self.device), self.ep_len-1] = self.reward_cossim_cls(torch.ones((self.num_episodes,), dtype=torch.bool, device=self.device), last_cls_token)
-
         
         logger.info(f"Rollout done. {self.num_episodes} episodes ran in {time.time() - time_s: .2f} secs")
 
@@ -609,7 +679,7 @@ class Environment:
             current_act_sym = self.action_symbols[not_done, ep_t]
             current_upd_pos = self.update_positions[not_done, ep_t]
             current_upd_sym = self.update_symbols[not_done, ep_t]
-            pos_log_prob, pos_ent, sym_log_prob, sym_ent, state_value = actor_critic.evaluate(current_states, mask[not_done], current_act_pos, current_act_sym, gt_positions=current_upd_pos)
+            pos_log_prob, pos_ent, sym_log_prob, sym_ent, state_value = actor_critic.evaluate(current_states, mask[not_done], current_act_pos, current_upd_pos, current_act_sym)
             curr_pos_log_probs[not_done, ep_t] , curr_sym_log_probs[not_done, ep_t], curr_pos_entropies[not_done, ep_t], curr_sym_entropies[not_done, ep_t], curr_values[not_done, ep_t] = pos_log_prob, sym_log_prob, pos_ent, sym_ent, state_value
 
             # Update state with the new constituents

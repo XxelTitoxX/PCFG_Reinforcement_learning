@@ -80,6 +80,131 @@ def map_scores_to_sentences(embedding_pairs_scores: torch.Tensor, sequence_lengt
     return output
     
 
+class ActorNetwork(nn.Module):
+    def __init__(self, embedding_dim:int, action_dim:int = 1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(2 * embedding_dim, 2 * embedding_dim),
+            nn.ReLU(),
+            nn.Linear(2 * embedding_dim, action_dim)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class PositionActor(nn.Module):
+    def __init__(self, embedding_dim : int, temperature : float = 1.0):
+        super().__init__()
+        self.actor_network: ActorNetwork = ActorNetwork(embedding_dim=embedding_dim)
+        self.temperature: float = temperature
+
+    def forward(self, sequence_embedding: torch.Tensor, sentence_lengths: torch.Tensor):
+        """
+        Given a batch of sequence embeddings and ground truth positions, returns the log probabilities of the ground truth positions.
+        :param sequence_embedding: torch.Tensor of shape (batch_size, seq_max_len, embedding_dim)
+        :param sentence_lengths: torch.Tensor of shape (batch_size,)
+        :param gt_positions: torch.Tensor of shape (batch_size,)
+        :return: position_action_logprob: torch.Tensor of shape (batch_size,)
+        """
+
+        # Get adjacent pairs of embeddings
+        adjacent_pairs: torch.Tensor = get_adjacent_pairs(sequence_embedding, sentence_lengths) # (num_pairs, 2 * embedding_dim)
+
+        embedding_pairs_scores: torch.Tensor = self.actor_network(adjacent_pairs) # (num_pairs, 1)
+
+        # Map scores back to sentence positions
+        scores: torch.Tensor = map_scores_to_sentences(embedding_pairs_scores.squeeze(dim=1), sentence_lengths) # (batch_size, max_seq_len - 1)
+
+        # Get position action distribution
+        action_probs = torch.softmax(scores/self.temperature, dim=1) # (batch_size, max_seq_len - 1)
+
+        # Get log probability of ground truth positions
+        dist: Categorical = Categorical(action_probs)
+        if self.training:
+            position_action = dist.sample().long() # (batch_size,)
+        else:
+            position_action = torch.argmax(action_probs, dim=1) # (batch_size,)
+        position_action_logprob: torch.Tensor = dist.log_prob(position_action) # (batch_size,)
+        entropy = dist.entropy() # (batch_size,)
+
+        return position_action, position_action_logprob, entropy
+    
+    def evaluate(self, sequence_embedding: torch.Tensor, sentence_lengths: torch.Tensor, position_action: torch.Tensor):
+        # Get adjacent pairs of embeddings
+        adjacent_pairs: torch.Tensor = get_adjacent_pairs(sequence_embedding, sentence_lengths) # (num_pairs, 2 * embedding_dim)
+
+        embedding_pairs_scores: torch.Tensor = self.actor_network(adjacent_pairs) # (num_pairs, 1)
+
+        # Map scores back to sentence positions
+        scores: torch.Tensor = map_scores_to_sentences(embedding_pairs_scores.squeeze(dim=1), sentence_lengths) # (batch_size, max_seq_len - 1)
+
+        # Get position action distribution
+        action_probs = torch.softmax(scores/self.temperature, dim=1) # (batch_size, max_seq_len - 1)
+
+        # Get log probability of ground truth positions
+        dist: Categorical = Categorical(action_probs)
+        position_action_logprob: torch.Tensor = dist.log_prob(position_action) # (batch_size,)
+        entropy = dist.entropy() # (batch_size,)
+
+        return position_action_logprob, entropy
+
+    
+
+class SymbolActor(nn.Module):
+    def __init__(self, embedding_dim:int, action_dim:int, temperature:float = 1.0):
+        super().__init__()
+        self.actor_network: ActorNetwork = ActorNetwork(embedding_dim=embedding_dim, action_dim=action_dim)
+        self.temperature = temperature
+
+    def forward(self, sequence_embedding:torch.Tensor, position_action:torch.Tensor):
+        batch_size = sequence_embedding.shape[0]
+
+        # Concatenate embedding for the pair of constituents (position_action, position_action +1)
+        symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
+
+        # Calculate symbol scores for each pair
+        symbol_scores: torch.Tensor = self.actor_network(symbol_pair_emb) # (batch_size, action_dim)
+
+        # Transform symbol logits into probabilities
+        symbol_probs: torch.Tensor = torch.softmax(symbol_scores/self.temperature, dim=1) # (batch_size, action_dim)
+
+        # Sample symbol action
+        dist: Categorical = Categorical(symbol_probs)
+        if self.training:
+            symbol_action: torch.Tensor = dist.sample() # (batch_size,)
+        else:
+            symbol_action: torch.Tensor = torch.argmax(symbol_probs, dim=1) # (batch_size,)
+        
+        symbol_action_logprob: torch.Tensor = dist.log_prob(symbol_action) # (batch_size,)
+
+        action_entropy = dist.entropy()
+
+        return symbol_action, symbol_action_logprob, action_entropy
+    
+    def evaluate(self, sequence_embedding:torch.Tensor, position_action:torch.Tensor, symbol_action:torch.Tensor):
+        batch_size = sequence_embedding.shape[0]
+
+        # Concatenate embedding for the pair of constituents (position_action, position_action +1)
+        symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
+
+        # Calculate symbol scores for each pair
+        symbol_scores: torch.Tensor = self.actor_network(symbol_pair_emb) # (batch_size, action_dim)
+
+        # Transform symbol logits into probabilities
+        symbol_probs: torch.Tensor = torch.softmax(symbol_scores/self.temperature, dim=1) # (batch_size, action_dim)
+
+        # Get action distributions
+        dist: Categorical = Categorical(symbol_probs)
+        
+        symbol_action_logprob: torch.Tensor = dist.log_prob(symbol_action) # (batch_size,)
+        entropy = dist.entropy()
+
+        return symbol_action_logprob, entropy
+
+
+    
+
 class ActorCritic(nn.Module):
     def __init__(
             self, state_dim: int, embedding_dim : int, action_dim: int, n_layer: int, num_heads: int, vocab_size: int
@@ -94,8 +219,8 @@ class ActorCritic(nn.Module):
         assert self.embedding_dim > 0, f"embedding_dim must be greater than 0, got {self.embedding_dim}"
 
         self.tag_embedder: TagEmbedder = TagEmbedder(tag_dim=state_dim, embedding_dim=embedding_dim)
-        self.word_embedder: IndexWordEmbedder = IndexWordEmbedder(vocab_size=vocab_size, embedding_dim=embedding_dim)
-        #self.word_embedder: BertWordEmbedder = BertWordEmbedder(embedding_dim=embedding_dim)
+        #self.word_embedder: IndexWordEmbedder = IndexWordEmbedder(vocab_size=vocab_size, embedding_dim=embedding_dim)
+        self.word_embedder: BertWordEmbedder = BertWordEmbedder(embedding_dim=embedding_dim)
         self.word_tag_embedder: WordTagEmbedder = WordTagEmbedder(
             word_embedder=self.word_embedder, tag_embedder=self.tag_embedder, embedding_dim=embedding_dim, num_nt=action_dim
         )
@@ -105,18 +230,9 @@ class ActorCritic(nn.Module):
         self.transformer_layer: ConvEncoderLayer = ConvEncoderLayer(embedding_dim=embedding_dim, num_layers=n_layer)
         #self.transformer_layer: TransformerLayer = TransformerLayer(embedding_dim=embedding_dim, num_layers=n_layer, num_heads=num_heads, dropout=0.1)
 
-        # discrete actor
-        self.position_actor: nn.Sequential = nn.Sequential(
-            nn.Linear(2*embedding_dim, 2*embedding_dim),
-            nn.ReLU(),
-            nn.Linear(2*embedding_dim, 1),
-        )
+        self.position_actor: PositionActor = PositionActor(embedding_dim=embedding_dim)
 
-        self.symbol_actor: nn.Sequential = nn.Sequential(
-            nn.Linear(2*embedding_dim, 2*embedding_dim),
-            nn.ReLU(),
-            nn.Linear(2*embedding_dim, action_dim),
-        )
+        self.symbol_actor: SymbolActor = SymbolActor(embedding_dim=embedding_dim, action_dim=action_dim)
 
         # critic
         self.critic: nn.Sequential = nn.Sequential(
@@ -130,9 +246,6 @@ class ActorCritic(nn.Module):
             f"state_dim={state_dim}, action_dim={action_dim}, "
             f"embedding_dim={embedding_dim}, n_layer={n_layer}"
         )
-
-    def forward(self):
-        raise NotImplementedError
 
     def encode_state(self, state: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
@@ -154,14 +267,13 @@ class ActorCritic(nn.Module):
         return self.word_tag_embedder(batch_sentences)
         
 
-    def act(self, states: torch.Tensor, mask: torch.Tensor, max_prob:bool=False, gt_positions:torch.Tensor=None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def act(self, states: torch.Tensor, mask: torch.Tensor, position_update:torch.Tensor = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Given a batch of states, sample an action for each state, calculate the action log probability, and new state value.
         :param state: torch.Tensor of shape (batch_size, seq_max_len, embedding_dim)
         :param mask: torch.Tensor of shape (batch_size, seq_max_len) where 1 means the position is valid and 0 means it is padding
         :return: tuple of action, action log probability, and state value, all are np.ndarray of shape (batch_size,)
         """
-
         batch_size: int = states.shape[0]
         sentence_lengths: torch.Tensor = torch.sum(mask, dim=1) # (batch_size,)
         assert len(states.shape) == 3, (
@@ -178,47 +290,12 @@ class ActorCritic(nn.Module):
             f"sequence_embedding must have a shape ({batch_size},{states.shape[1]},{self.embedding_dim}), got {sequence_embedding.shape}"
         )
 
-        # Get adjacent pairs of embeddings
-        adjacent_pairs: torch.Tensor = get_adjacent_pairs(sequence_embedding, sentence_lengths) # (num_pairs, 2 * embedding_dim)
-
-        # Calculate scores for adjacent pairs
-        embedding_pairs_scores: torch.Tensor = self.position_actor(adjacent_pairs) # (num_pairs, 1)
-
-        # Map scores back to sentence positions
-        scores: torch.Tensor = map_scores_to_sentences(embedding_pairs_scores.squeeze(dim=1), sentence_lengths) # (batch_size, max_seq_len - 1)
-
-        # Get position action distribution
-        action_probs: torch.Tensor = torch.softmax(scores, dim=1) # (batch_size, max_seq_len - 1)
-
-        # Sample position in the sequence with according log probability
-        dist: Categorical = Categorical(action_probs)
-        if max_prob:
-            position_action: torch.Tensor = torch.argmax(action_probs, dim=1) # (batch_size,)
+        position_action, position_action_logprob, _ = self.position_actor(sequence_embedding, sentence_lengths)
+        if position_update is not None: # supervised position update
+            pos_update = position_update
         else:
-            position_action: torch.Tensor = dist.sample().long() # (batch_size,)
-        position_action_logprob: torch.Tensor = dist.log_prob(position_action)
-
-
-        if gt_positions is not None:
-            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), gt_positions], sequence_embedding[torch.arange(batch_size), gt_positions + 1]), dim=1) # (batch_size, embedding_dim*2)
-        else:
-            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
-
-        # Calculate symbol scores for each pair
-        symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair_emb) # (batch_size, action_dim)
-        symbol_scores = symbol_scores #+ symbol_mask
-        arbitrary_temperature = 1.0
-        symbol_probs: torch.Tensor = torch.softmax(symbol_scores/arbitrary_temperature, dim=1) # (batch_size, action_dim)
-
-        # Sample symbol action
-        dist: Categorical = Categorical(symbol_probs)
-        if max_prob:
-            symbol_action: torch.Tensor = torch.argmax(symbol_probs, dim=1)
-        else:
-            symbol_action: torch.Tensor = dist.sample()
-        symbol_action_logprob: torch.Tensor = dist.log_prob(symbol_action)
-
-
+            pos_update = position_action
+        symbol_action, symbol_action_logprob, _ = self.symbol_actor(sequence_embedding, pos_update)
 
         # state_val: (B,1)
         state_val: torch.Tensor = self.critic(cls_token).squeeze(dim=1)
@@ -232,26 +309,25 @@ class ActorCritic(nn.Module):
         assert torch.all(position_action_logprob > float('-inf')), (
             f"action_logprob must be greater than -inf"
         )
+        
         return position_action.to(torch.int32), position_action_logprob, symbol_action.to(torch.int32), symbol_action_logprob, state_val
 
     def evaluate(
-            self, states: torch.Tensor, mask: torch.Tensor, position_action: torch.Tensor, symbol_action: torch.Tensor, gt_positions: torch.Tensor=None
+            self, states: torch.Tensor, mask: torch.Tensor, position_action: torch.Tensor, position_update: torch.Tensor, symbol_action: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Given a batch of state and action, calculate the action log probability, entropy, and state value.
         :param state: torch.Tensor of shape (batch_size, seq_max_len)
-        :param action: torch.Tensor of shape (batch_size,)
+        :param position_action: torch.Tensor of shape (batch_size,) the sampled action from position actor
+        :param position_update: torch.Tensor of shape (batch_size,) the position used for the constituent merge (can be ground truth or sampled)
+        :param symbol_action: torch.Tensor of shape (batch_size,)
         :return: tuple of action log probability, entropy, and state value, all are torch.Tensor of shape (batch_size,)
         """
         batch_size: int = states.shape[0]
         sentence_lengths: torch.Tensor = torch.sum(mask, dim=1) # (batch_size,)
         assert len(states.shape) == 3, (
-            f"state must be a 2d tensor (batch_size, seq_max_len, embedding_dim), got {states.shape}"
+            f"state must be a 3d tensor (batch_size, seq_max_len, embedding_dim), got {states.shape}"
         )
-        assert torch.all(position_action >= 0) and torch.all(position_action < sentence_lengths-1), (
-            f"action must be in range [0, sentence_length-2), got position action {position_action}, and sentence lengths{sentence_lengths}"
-        )
-        assert position_action.shape == symbol_action.shape == (batch_size,), f'action must have a shape {(batch_size,)}, got {position_action.shape}, {symbol_action.shape}'
 
         cls_token, sequence_embedding = self.encode_state(
             states, mask
@@ -263,43 +339,19 @@ class ActorCritic(nn.Module):
             f"sequence_embedding must have a shape ({batch_size},{states.shape[1]},{self.embedding_dim}), got {sequence_embedding.shape}"
         )
 
-        # Get adjacent pairs of embeddings
-        adjacent_pairs: torch.Tensor = get_adjacent_pairs(sequence_embedding, sentence_lengths) # (num_pairs, 2 * embedding_dim)
-
-        # Calculate scores for adjacent pairs
-        embedding_pairs_scores: torch.Tensor = self.position_actor(adjacent_pairs) # (num_pairs, 1)
-
-        # Map scores back to sentence positions
-        scores: torch.Tensor = map_scores_to_sentences(embedding_pairs_scores.squeeze(dim=1), sentence_lengths) # (batch_size, max_seq_len - 1)
-
-        # Get position action distribution
-        action_probs: torch.Tensor = torch.softmax(scores, dim=1) # (batch_size, max_seq_len - 1)
-
-        # Sample position in the sequence with according log probability
-        dist: Categorical = Categorical(action_probs)
-        position_action_logprob: torch.Tensor = dist.log_prob(position_action)
-        position_entropy: torch.Tensor = dist.entropy() # (batch_size,)
-
-        if gt_positions is not None:
-            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), gt_positions], sequence_embedding[torch.arange(batch_size), gt_positions + 1]), dim=1) # (batch_size, embedding_dim*2)
-        else:
-            symbol_pair_emb: torch.Tensor = torch.cat((sequence_embedding[torch.arange(batch_size), position_action], sequence_embedding[torch.arange(batch_size), position_action + 1]), dim=1) # (batch_size, embedding_dim*2)
-
-        # Calculate symbol scores for each pair
-        symbol_scores: torch.Tensor = self.symbol_actor(symbol_pair_emb) # (batch_size, action_dim)
-        symbol_scores = symbol_scores #+ symbol_mask
-        symbol_probs: torch.Tensor = torch.softmax(symbol_scores, dim=1) # (batch_size, action_dim)
-
-        # Sample symbol action
-        dist: Categorical = Categorical(symbol_probs)
-        symbol_action_logprob: torch.Tensor = dist.log_prob(symbol_action)
-        symbol_entropy: torch.Tensor = dist.entropy()
+        position_action_logprob, position_entropy = self.position_actor.evaluate(sequence_embedding, sentence_lengths, position_action)
+        symbol_action_logprob, symbol_entropy = self.symbol_actor.evaluate(sequence_embedding, position_update, symbol_action)
 
         # state_val: (B,1)
         state_val: torch.Tensor = self.critic(cls_token).squeeze(dim=1)
-
-
-        assert torch.all(position_action_logprob >= -np.inf), (
+        assert position_action.shape == position_action_logprob.shape == symbol_action.shape == symbol_action_logprob.shape == state_val.shape == (batch_size,), (
+            f"position_action, position_action_logprob, symbol_action, symbol_action_logprob, and state_val must have a shape (batch_size,), "
+            f"got {position_action.shape}, {position_action_logprob.shape}, {symbol_action.shape}, {symbol_action_logprob.shape}, {state_val.shape}"
+        )
+        assert torch.all(position_action >= 0) and torch.all(position_action < sentence_lengths-1), (
+            f"action must be in range [0, sentence_length-2), got {position_action.min()}, {position_action.max()}"
+        )
+        assert torch.all(position_action_logprob > float('-inf')), (
             f"action_logprob must be greater than -inf"
         )
 

@@ -19,6 +19,7 @@ from result_saver import ResultSaver
 from writer import Writer
 from grammar_env.criterion import F1Criterion
 from n_gram import NGram
+from enum import Enum
 
 logger = getLogger(__name__)
 
@@ -26,6 +27,12 @@ logger = getLogger(__name__)
 # https://discuss.pytorch.org/t/pytorch-v2-high-cpu-consumption/205990
 # OpenMP uses all the cpu cores by default, leading to inefficiency.
 torch.set_num_threads(1)
+
+class TrainMode(Enum):
+    DEFAULT = 0
+    POS_ONLY = 1
+    SYM_ONLY = 2
+    ALTERNATE = 3
 
 
 def mean(x: list[Any]) -> float:
@@ -125,6 +132,8 @@ class PPOConfig:
     gradient_clip : Optional[float] = None
     pure_reinforce : bool = True
 
+    train_mode : TrainMode = TrainMode.DEFAULT
+
 
 class PPO:
     def __init__(
@@ -195,6 +204,50 @@ class PPO:
         }
 
 
+    def reinforce_loss(self, pos_rtgs: torch.Tensor, pos_log_probs: torch.Tensor, pos_entropies: torch.Tensor,
+                       sym_rtgs: torch.Tensor, sym_log_probs: torch.Tensor, sym_entropies: torch.Tensor, iteration:int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Calculate the REINFORCE loss for the actor network.
+        """
+        if self.config.train_mode == TrainMode.SYM_ONLY or (self.config.train_mode == TrainMode.ALTERNATE and iteration %2 ==1):
+            pos_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
+        else:
+            pos_loss: torch.Tensor = -(pos_log_probs * pos_rtgs + self.config.entropy_weight * pos_entropies).mean()
+        if self.config.train_mode == TrainMode.POS_ONLY or (self.config.train_mode == TrainMode.ALTERNATE and iteration %2 ==0):
+            sym_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
+        else:
+            sym_loss: torch.Tensor = -(sym_log_probs * sym_rtgs + self.config.entropy_weight * sym_entropies).mean()
+        loss: torch.Tensor = pos_loss + sym_loss
+        return loss, pos_loss, sym_loss, torch.tensor(0.0, device=self.device)
+    
+    def ppo_loss(self, P_A_k: torch.Tensor, curr_pos_log_probs: torch.Tensor, positions_log_probs, pos_dist_entropy: torch.Tensor, 
+                 S_A_k: torch.Tensor, curr_sym_log_probs: torch.Tensor, symbols_log_probs, sym_dist_entropy: torch.Tensor,
+                 pos_rtgs: torch.Tensor, sym_rtgs: torch.Tensor, V: torch.Tensor, iteration:int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Calculate the PPO loss for the actor and critic networks.
+        """
+
+        # Calculate surrogate losses.
+        if self.config.train_mode == TrainMode.SYM_ONLY or (self.config.train_mode == TrainMode.ALTERNATE and iteration %2 ==1):
+            pos_actor_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
+        else:
+            pos_ratios: torch.Tensor = torch.exp(curr_pos_log_probs - positions_log_probs)
+            pos_surr1: torch.Tensor = pos_ratios * P_A_k
+            pos_surr2: torch.Tensor = torch.clamp(pos_ratios, 1 - self.config.clip, 1 + self.config.clip) * P_A_k
+            pos_actor_loss: torch.Tensor = -(torch.min(pos_surr1, pos_surr2) + self.config.entropy_weight * pos_dist_entropy).mean()
+        if self.config.train_mode == TrainMode.POS_ONLY or (self.config.train_mode == TrainMode.ALTERNATE and iteration %2 ==0):
+            sym_actor_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
+        else:
+            sym_ratios: torch.Tensor = torch.exp(curr_sym_log_probs - symbols_log_probs)
+            sym_surr1: torch.Tensor = sym_ratios * S_A_k
+            sym_surr2: torch.Tensor = torch.clamp(sym_ratios, 1 - self.config.clip, 1 + self.config.clip) * S_A_k
+            sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + self.config.entropy_weight * sym_dist_entropy).mean()
+
+
+        critic_loss: torch.Tensor = F.mse_loss(V, pos_rtgs+sym_rtgs)
+        loss: torch.Tensor = self.config.actor_weight * (pos_actor_loss+sym_actor_loss)/2 + self.config.critic_weight * critic_loss
+        assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"
+        return loss, pos_actor_loss, sym_actor_loss, critic_loss
 
     def learn(self, total_timesteps: int) -> None:
         """
@@ -223,11 +276,11 @@ class PPO:
                 self.train_iterator = iter(self.train_dataloader)
                 batch_t_stc = next(self.train_iterator)
             # ALG STEP 3, batch simulation
-            self.actor_critic.eval()
+            self.actor_critic.train()
             with torch.no_grad():
                 
                 self.env.rollout(
-                    self.actor_critic, batch_t_stc, supervised_update=False)
+                    self.actor_critic, batch_t_stc)
                 V, positions, positions_log_probs, pos_rtgs, symbols, symbols_log_probs, sym_rtgs, ep_rtgs, mask_before, mask_after = self.env.collect_data_batch(self.config.gamma) # mask_position, mask_symbol
                 # NOTE: V contains one extra timestep at the end
                 batch_lens: torch.Tensor = self.env.ep_len
@@ -259,9 +312,7 @@ class PPO:
             # Calculate advantage at k-th iteration
             with torch.no_grad():
                 if self.config.pure_reinforce:
-                    #P_A_k: torch.Tensor = (pos_rtgs - pos_rtgs.mean()) / (pos_rtgs.std() + 1e-10)  # Batch normalization
-                    #S_A_k: torch.Tensor = (sym_rtgs - sym_rtgs.mean()) / (sym_rtgs.std() + 1e-10)  # Batch normalization
-                    P_A_k: torch.Tensor = pos_rtgs  # No normalization
+                    P_A_k: torch.Tensor = pos_rtgs  # No normalization : it has been observed that normalizing advantages in pure REINFORCE harms performance
                     S_A_k: torch.Tensor = sym_rtgs  # No normalization
                 else:
                     A_k: torch.Tensor = pos_rtgs+sym_rtgs - V[mask_before]  # ALG STEP 5
@@ -281,41 +332,14 @@ class PPO:
                 # Calculate V_phi and pi_theta(a_t | s_t)
                 curr_pos_log_probs, pos_dist_entropy, curr_sym_log_probs, sym_dist_entropy, V, add_obj = self.env.replay(self.actor_critic, b_add_obj=False) # [mask_position]
                 if self.config.pure_reinforce:
-                    alternator = idx_upd % 2
-                    pos_actor_loss = -(curr_pos_log_probs * P_A_k + self.config.entropy_weight*pos_dist_entropy).mean()
-                    sym_actor_loss = -(curr_sym_log_probs * S_A_k + self.config.entropy_weight*sym_dist_entropy).mean()
-                    critic_loss = torch.tensor([0.0])
-                    #loss = (1-alternator)*pos_actor_loss + alternator*sym_actor_loss - 0.5*add_obj
-                    loss = pos_actor_loss + sym_actor_loss - 0.5*add_obj
+                    loss, pos_actor_loss, sym_actor_loss, critic_loss = self.reinforce_loss(P_A_k, curr_pos_log_probs, pos_dist_entropy, S_A_k, curr_sym_log_probs, sym_dist_entropy, i_so_far)
+                    loss = loss - 0.5*add_obj
                     logger.info(f"Additional objective: {add_obj.item()}")
 
                 else:
-
-                    # Calculate the ratio pi_theta(a_t | s_t) / pi_theta_k(a_t | s_t)
-                    # NOTE: we just subtract the logs, which is the same as
-                    # dividing the values and then canceling the log with e^log.
-                    # For why, we use log probabilities instead of actual probabilities,
-                    # here's a great explanation:
-                    # https://cs.stackexchange.com/questions/70518/why-do-we-use-the-log-in-gradient-based-reinforcement-algorithms
-                    # TL;DR makes gradient ascent easier behind the scenes.
-                    pos_ratios: torch.Tensor = torch.exp(curr_pos_log_probs - positions_log_probs)
-                    sym_ratios: torch.Tensor = torch.exp(curr_sym_log_probs - symbols_log_probs)
-
-                    # Calculate surrogate losses.
-                    pos_surr1: torch.Tensor = pos_ratios * P_A_k
-                    pos_surr2: torch.Tensor = torch.clamp(pos_ratios, 1 - self.config.clip, 1 + self.config.clip) * P_A_k
-                    sym_surr1: torch.Tensor = sym_ratios * S_A_k
-                    sym_surr2: torch.Tensor = torch.clamp(sym_ratios, 1 - self.config.clip, 1 + self.config.clip) * S_A_k
-
-                    # Calculate actor and critic losses.
-                    # NOTE: we take the negative min of the surrogate losses because we're trying to maximize
-                    # the performance function, but Adam minimizes the loss. So minimizing the negative
-                    # performance function maximizes it.
-                    pos_actor_loss: torch.Tensor = -(torch.min(pos_surr1, pos_surr2) + self.config.entropy_weight * pos_dist_entropy).mean()
-                    sym_actor_loss: torch.Tensor = -(torch.min(sym_surr1, sym_surr2) + self.config.entropy_weight * sym_dist_entropy).mean()
-                    critic_loss: torch.Tensor = F.mse_loss(V, pos_rtgs+sym_rtgs)
-                    loss: torch.Tensor = self.config.actor_weight * (pos_actor_loss+sym_actor_loss)/2 + self.config.critic_weight * critic_loss
-                    assert loss.isnan().sum().item() == 0, f"loss must not have NaN, got {loss}"
+                    loss, pos_actor_loss, sym_actor_loss, critic_loss = self.ppo_loss(P_A_k, curr_pos_log_probs, positions_log_probs, pos_dist_entropy,
+                                         S_A_k, curr_sym_log_probs, symbols_log_probs, sym_dist_entropy,
+                                         pos_rtgs, sym_rtgs, V, idx_upd+i_so_far)
 
                 # Calculate gradients and perform backward propagation for actor_critic network
                 self.optim.zero_grad()

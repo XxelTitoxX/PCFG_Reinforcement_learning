@@ -73,6 +73,7 @@ class ResultSaver:
             self, name: str, i_so_far: int, actor_critic: ActorCritic,
             commit: bool
     ):
+        actor_critic.eval()
         with torch.no_grad():
             try:
                 train_sentences = next(self.train_iterator)
