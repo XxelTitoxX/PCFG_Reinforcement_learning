@@ -20,6 +20,7 @@ from writer import Writer
 from grammar_env.criterion import F1Criterion
 from n_gram import NGram
 from enum import Enum
+#from torchviz import make_dot
 
 logger = getLogger(__name__)
 
@@ -344,6 +345,9 @@ class PPO:
                 # Calculate gradients and perform backward propagation for actor_critic network
                 self.optim.zero_grad()
                 loss.backward()
+                print(f"Gradient of position log probs: {curr_pos_log_probs.requires_grad}, {curr_pos_log_probs.grad_fn}, {curr_pos_log_probs.grad}")
+                #dot = make_dot(pos_actor_loss, params=dict(self.actor_critic.position_actor.named_parameters()))
+                #dot.render("computation_graph", format="png")
                 # Clip gradients to prevent exploding gradients
                 if self.config.gradient_clip is not None:
                     torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.config.gradient_clip)

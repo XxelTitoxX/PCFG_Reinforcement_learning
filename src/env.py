@@ -660,12 +660,23 @@ class Environment:
         max_seq_len = self.sentence_lengths.max().item()
         mask = torch.arange(max_seq_len, device=self.device)[None, :] < self.sentence_lengths[:, None]
 
-
         curr_pos_log_probs = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
         curr_sym_log_probs = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
         curr_pos_entropies = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
         curr_sym_entropies = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
         curr_values = torch.zeros((self.num_episodes, max_seq_len-1), dtype=torch.float32, device=self.device)
+        
+
+        # Use python list and then torch.stack for gradient tracking
+
+        """
+        curr_pos_log_probs = [[] for _ in range(self.num_episodes)]
+        curr_sym_log_probs = [[] for _ in range(self.num_episodes)]
+        curr_pos_entropies = [[] for _ in range(self.num_episodes)]
+        curr_sym_entropies = [[] for _ in range(self.num_episodes)]
+        curr_values = [[] for _ in range(self.num_episodes)]
+        """
+
         add_obj = torch.tensor([0.0], device=self.device) # Additional objective for the PPO loss, e.g. contrastive loss
         nb_terms = 0
         # Run an episode for max_timesteps_per_episode timesteps
@@ -673,6 +684,7 @@ class Environment:
         for ep_t in range(self.ep_len.max()):
 
             not_done = torch.full((self.num_episodes,), ep_t, dtype=torch.int32, device=self.device) < self.ep_len
+            not_done_range = torch.arange(self.num_episodes, device=self.device)[not_done]
 
             current_states = self.state[not_done]
             current_act_pos = self.action_positions[not_done, ep_t]
@@ -680,7 +692,17 @@ class Environment:
             current_upd_pos = self.update_positions[not_done, ep_t]
             current_upd_sym = self.update_symbols[not_done, ep_t]
             pos_log_prob, pos_ent, sym_log_prob, sym_ent, state_value = actor_critic.evaluate(current_states, mask[not_done], current_act_pos, current_upd_pos, current_act_sym)
+
             curr_pos_log_probs[not_done, ep_t] , curr_sym_log_probs[not_done, ep_t], curr_pos_entropies[not_done, ep_t], curr_sym_entropies[not_done, ep_t], curr_values[not_done, ep_t] = pos_log_prob, sym_log_prob, pos_ent, sym_ent, state_value
+
+            """
+            for i in range(not_done.sum().item()):
+                curr_pos_log_probs[not_done_range[i]].append(pos_log_prob[i])
+                curr_sym_log_probs[not_done_range[i]].append(sym_log_prob[i])
+                curr_pos_entropies[not_done_range[i]].append(pos_ent[i])
+                curr_sym_entropies[not_done_range[i]].append(sym_ent[i])
+                curr_values[not_done_range[i]].append(state_value[i])
+            """
 
             # Update state with the new constituents
             left = current_states[torch.arange(not_done.sum().item()), current_upd_pos, :]
@@ -702,6 +724,14 @@ class Environment:
         # Prepare the data for the PPO loss
         add_obj = add_obj / (nb_terms+1)
         mask = torch.arange(max_seq_len-1, device=self.device)[None, :] < self.ep_len[:, None]
+        """
+        flat_curr_pos_log_probs = torch.cat([torch.stack(row) for row in curr_pos_log_probs if len(row) > 0], dim=0)
+        flat_curr_sym_log_probs = torch.cat([torch.stack(row) for row in curr_sym_log_probs if len(row) > 0], dim=0)
+        flat_curr_pos_entropies = torch.cat([torch.stack(row) for row in curr_pos_entropies if len(row) > 0], dim=0)
+        flat_curr_sym_entropies = torch.cat([torch.stack(row) for row in curr_sym_entropies if len(row) > 0], dim=0)
+        flat_curr_values = torch.cat([torch.stack(row) for row in curr_values if len(row) > 0], dim=0)
+        """
         return curr_pos_log_probs[mask], curr_pos_entropies[mask], curr_sym_log_probs[mask], curr_sym_entropies[mask], curr_values[mask], add_obj
+        # return flat_curr_pos_log_probs, flat_curr_pos_entropies, flat_curr_sym_log_probs, flat_curr_sym_entropies, flat_curr_values, add_obj
     
 
