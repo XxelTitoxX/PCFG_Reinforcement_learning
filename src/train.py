@@ -88,6 +88,7 @@ if __name__ == '__main__':
     parser.add_argument("--gradient_clip", type=float)
     parser.add_argument("--pure_reinforce", action='store_true')
     parser.add_argument("--name", type=str, default="")
+    parser.add_argument("--nt_freq_offset", action='store_true')
 
     args: argparse.Namespace = parser.parse_args()
 

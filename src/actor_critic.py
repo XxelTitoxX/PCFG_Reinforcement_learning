@@ -265,6 +265,9 @@ class ActorCritic(nn.Module):
         Returns: torch.Tensor of shape (batch_size, seq_max_len, embedding_dim)
         """
         return self.word_tag_embedder(batch_sentences)
+    
+    def forward(self):
+        raise NotImplementedError("ActorCritic does not implement forward method. Use act or evaluate instead.")
         
 
     def act(self, states: torch.Tensor, mask: torch.Tensor, position_update:torch.Tensor = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:

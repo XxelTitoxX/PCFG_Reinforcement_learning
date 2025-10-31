@@ -151,8 +151,8 @@ class Environment:
         self.ep_len : torch.Tensor = None
         self.cls_tokens: Optional[torch.Tensor] = None
 
-        self.update_mode: UpdateMode = UpdateMode.ACTION
-        self.verbose: bool = True
+        self.update_mode: UpdateMode = UpdateMode.GT_POS
+        self.verbose: bool = False
 
     def reset(self, batch_sentences: list[Sentence], batch_s_embeddings: torch.Tensor):
         self.num_episodes = len(batch_sentences)
@@ -355,7 +355,8 @@ class Environment:
 
         for i in range(len(new_spans)):
             sym = gt_spans[i].get((new_spans[i,0].item(), new_spans[i,1].item()), None)
-            sym_reward[i] = float(sym == new_symbols[i].item())
+            nt_factor = 1.0 if self.symbol_freq is None else min(10.0, 1/(len(self.symbol_freq.keys())*self.symbol_freq.get(new_symbols[i].item(), 0.0) + 1e-9))
+            sym_reward[i] = float(sym == new_symbols[i].item())* nt_factor
 
         return sym_reward
 
@@ -599,8 +600,6 @@ class Environment:
         :param evaluate: If True, the model will not sample actions but take the most probable ones.
         """
         time_s = time.time()
-
-        actor_critic.eval()
 
         batch_s_embeddings = actor_critic.encode_sentence(batch_sentences)
 

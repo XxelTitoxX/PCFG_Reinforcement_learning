@@ -133,7 +133,8 @@ class PPOConfig:
     gradient_clip : Optional[float] = None
     pure_reinforce : bool = True
 
-    train_mode : TrainMode = TrainMode.DEFAULT
+    train_mode : TrainMode = TrainMode.SYM_ONLY
+    nt_freq_offset : bool = False
 
 
 class PPO:
@@ -163,7 +164,7 @@ class PPO:
         )
 
         # Setup environment
-        self.env: Environment = Environment(config.max_num_steps, 0.0, device, n_gram=n_gram, symbol_freq=train_corpus.symbol_freq)
+        self.env: Environment = Environment(config.max_num_steps, 0.0, device, n_gram=n_gram, symbol_freq=(train_corpus.symbol_freq if self.config.nt_freq_offset else None))
 
         # Initialize actor and critic networks
         self.actor_critic = ActorCritic(  # ALG STEP 1
@@ -345,9 +346,7 @@ class PPO:
                 # Calculate gradients and perform backward propagation for actor_critic network
                 self.optim.zero_grad()
                 loss.backward()
-                print(f"Gradient of position log probs: {curr_pos_log_probs.requires_grad}, {curr_pos_log_probs.grad_fn}, {curr_pos_log_probs.grad}")
-                #dot = make_dot(pos_actor_loss, params=dict(self.actor_critic.position_actor.named_parameters()))
-                #dot.render("computation_graph", format="png")
+                
                 # Clip gradients to prevent exploding gradients
                 if self.config.gradient_clip is not None:
                     torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.config.gradient_clip)
