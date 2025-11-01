@@ -133,7 +133,7 @@ class PPOConfig:
     gradient_clip : Optional[float] = None
     pure_reinforce : bool = True
 
-    train_mode : TrainMode = TrainMode.SYM_ONLY
+    train_mode : TrainMode = TrainMode.DEFAULT
     nt_freq_offset : bool = False
 
 
