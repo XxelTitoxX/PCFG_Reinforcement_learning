@@ -151,7 +151,7 @@ class Environment:
         self.ep_len : torch.Tensor = None
         self.cls_tokens: Optional[torch.Tensor] = None
 
-        self.update_mode: UpdateMode = UpdateMode.GT_POS
+        self.update_mode: UpdateMode = UpdateMode.ACTION
         self.verbose: bool = False
 
     def reset(self, batch_sentences: list[Sentence], batch_s_embeddings: torch.Tensor):
