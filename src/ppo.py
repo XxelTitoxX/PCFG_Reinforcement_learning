@@ -214,7 +214,7 @@ class PPO:
         if self.config.train_mode == TrainMode.SYM_ONLY or (self.config.train_mode == TrainMode.ALTERNATE and iteration %2 ==1):
             pos_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
         else:
-            pos_loss: torch.Tensor = -(pos_log_probs * pos_rtgs + self.config.entropy_weight * pos_entropies).mean()
+            pos_loss: torch.Tensor = -(pos_log_probs * pos_rtgs + min(self.config.entropy_weight, 0.01) * pos_entropies).mean()
         if self.config.train_mode == TrainMode.POS_ONLY or (self.config.train_mode == TrainMode.ALTERNATE and iteration %2 ==0):
             sym_loss: torch.Tensor = torch.tensor(0.0, device=self.device)
         else:
