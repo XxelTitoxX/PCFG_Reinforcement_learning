@@ -152,7 +152,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_pt_per_terminal', type=int, default=2, help="Maximum number of pre-terminals per terminal.")
     parser.add_argument('--ambiguity_prob', type=float, default=0.1, help="Probability of ambiguity in the grammar.")
     parser.add_argument('--max_unary_rules', type=int, default=None, help="Maximum number of unary rules in the grammar.")
-    parser.add_argument('--value_of_nt', type=float, default=2.0, help="Value of non-terminals in the grammar.")
+    parser.add_argument('--value_of_nt', type=float, default=1.5, help="Value of non-terminals in the grammar.")
     parser.add_argument('--max_value_per_rhs', type=int, default=7, help="Maximum value per right-hand side in the grammar.")
     parser.add_argument('--n_test_sentences', type=int, default=2000, help="Number of test sentences to generate.")
     parser.add_argument('--n_train_sentences', type=int, default=10000, help="Number of sentences from target grammar for the model training.")
