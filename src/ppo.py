@@ -113,7 +113,7 @@ class PPOConfig:
     clip: float = 0.2  # Recommended 0.2, helps define the threshold to clip the ratio during SGA
     actor_weight: float = 1.  # Weight of the actor loss
     critic_weight: float = 0.5  # Weight of the critic loss
-    entropy_weight: float = 0.01  # Weight of the entropy loss
+    entropy_weight: float = 1.  # Weight of the entropy loss
     entropy_weight_decay: float = 0.98  # Decay of the entropy weight
     entropy_weight_min: float = 0.01  # Minimum entropy weight
     entropy_weight_decay_freq: int = 10  # How often to decay the entropy weight
