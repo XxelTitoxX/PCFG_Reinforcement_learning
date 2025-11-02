@@ -203,7 +203,7 @@ if __name__ == "__main__":
         train_corpus._apply_symbol_idx()
         val_corpus._apply_symbol_idx()
 
-        ppo_config = PPOConfig(num_non_terminals= args.n_non_terminals, num_epochs=2, num_sentences_per_score=128, gamma=0.0)
+        ppo_config = PPOConfig(num_non_terminals= args.n_non_terminals, num_epochs=3, gamma=0.0)
         writer = Writer(f"grammar_induction_{i}", vars(ppo_config), use_wandb=False)
         device = get_device("cuda:0")
         ppo: PPO = PPO(

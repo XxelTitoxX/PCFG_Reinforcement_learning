@@ -60,6 +60,7 @@ if __name__ == '__main__':
     parser.add_argument("--no_multiprocess", action='store_true',
                         help="Disable multiprocessing for corpus initialization")
     parser.add_argument("--timesteps", type=int, default=int(1e7))
+    parser.add_argument("--num_epochs", type=int)
     parser.add_argument("--device", type=str, default="cuda:0")
 
     # use probability criterion by default
