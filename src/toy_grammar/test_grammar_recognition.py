@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import shutil
 
 CURRENT_DIR = Path(__file__).resolve().parent
 src_dir = CURRENT_DIR.parent
@@ -16,6 +17,8 @@ from device import get_device
 from build_cfg_from_corpus import save_model_cfg
 from nltk import CFG as NLTK_CFG
 from nltk.parse import EarleyChartParser
+from actor_critic import ActorCritic
+import torch
 import signal
 
 class TimeoutException(Exception):
@@ -64,6 +67,8 @@ def coverage_f1(n_test_grammars:int):
             with open(test_corpus_path, 'r') as f:
                 sentence_idx = 0
                 for test_sentence in f:
+                    if sentence_idx >= 100:
+                        break
                     print(f"Parsing sentence {sentence_idx} of corpus {j} with grammars {i}")
                     test_sentence = test_sentence.strip().split()
                     if len(test_sentence)==0:
@@ -154,13 +159,16 @@ if __name__ == "__main__":
     parser.add_argument('--max_unary_rules', type=int, default=None, help="Maximum number of unary rules in the grammar.")
     parser.add_argument('--value_of_nt', type=float, default=1.5, help="Value of non-terminals in the grammar.")
     parser.add_argument('--max_value_per_rhs', type=int, default=7, help="Maximum value per right-hand side in the grammar.")
-    parser.add_argument('--n_test_sentences', type=int, default=2000, help="Number of test sentences to generate.")
+    parser.add_argument('--n_test_sentences', type=int, default=100, help="Number of test sentences to generate.")
     parser.add_argument('--n_train_sentences', type=int, default=10000, help="Number of sentences from target grammar for the model training.")
     parser.add_argument('--max_length', type=int, default=70, help="Maximum length of the sentences to generate.")
     parser.add_argument('--n_grammars', type=int, default=8, help="Number of target grammars to generate.")
     parser.add_argument('--gen_grammars', action='store_true', help="Generate target grammars and save them to files.")
+    parser.add_argument('--load_model', action='store_true', help="Load pre-trained model instead of training from scratch.")
 
     args = parser.parse_args()
+
+    assert not (args.gen_grammars and args.load_model), "Cannot both generate grammars and load a pre-trained model."
 
     cfg_params = {
         'n_non_terminals': args.n_non_terminals,
@@ -192,29 +200,46 @@ if __name__ == "__main__":
             save_to_file(test_sentences, test_corpus_path)
             print(f"Generated target grammar {i} with {len(sentences)} training sentences and {len(test_sentences)} test sentences, saved to {str(CURRENT_DIR / 'target_grammar')}")
 
-        # Load the corpus
-        train_corpus = Corpus(training_corpus_path)
-        val_corpus = Corpus(val_corpus_path)
-        train_corpus._initialize_symbol_idx()
-        # train and valid corpus must use the same symbol_to_idx and idx_to_symbol for the correct results
-        val_corpus.symbol_to_idx = train_corpus.symbol_to_idx
-        val_corpus.idx_to_symbol = train_corpus.idx_to_symbol
-        val_corpus.vocab_size = train_corpus.vocab_size
-        train_corpus._apply_symbol_idx()
-        val_corpus._apply_symbol_idx()
+        if args.load_model:
+            train_corpus = Corpus(training_corpus_path)
+            train_corpus._initialize_symbol_idx()
+            train_corpus._apply_symbol_idx()
+            ppo_config = PPOConfig(num_non_terminals= args.n_non_terminals, num_epochs=3, gamma=0.0)
+            actor_critic = ActorCritic(
+                ppo_config.num_non_terminals+args.n_pre_terminals, ppo_config.embedding_dim, ppo_config.num_non_terminals, ppo_config.n_layer, ppo_config.n_head, train_corpus.vocab_size
+            )
+            actor_critic_path = CURRENT_DIR / "model_grammar" / f"actor_critic_bsf_{i}.pth"
+            actor_critic.load_state_dict(torch.load(actor_critic_path))
+            device = get_device("cuda:0")
+            actor_critic.to(device)
+        else:
+            # Load the corpus
+            train_corpus = Corpus(training_corpus_path)
+            val_corpus = Corpus(val_corpus_path)
+            train_corpus._initialize_symbol_idx()
+            # train and valid corpus must use the same symbol_to_idx and idx_to_symbol for the correct results
+            val_corpus.symbol_to_idx = train_corpus.symbol_to_idx
+            val_corpus.idx_to_symbol = train_corpus.idx_to_symbol
+            val_corpus.vocab_size = train_corpus.vocab_size
+            train_corpus._apply_symbol_idx()
+            val_corpus._apply_symbol_idx()
 
-        ppo_config = PPOConfig(num_non_terminals= args.n_non_terminals, num_epochs=3, gamma=0.0)
-        writer = Writer(f"grammar_induction_{i}", vars(ppo_config), use_wandb=False)
-        device = get_device("cuda:0")
-        ppo: PPO = PPO(
-            train_corpus, val_corpus, CURRENT_DIR / "model_grammar",
-            writer, device,
-            ppo_config,
-            n_gram=None,
-        )
-        ppo.learn(10000000)
+            ppo_config = PPOConfig(num_non_terminals= args.n_non_terminals, num_epochs=5, gamma=0.0)
+            writer = Writer(f"grammar_induction_{i}", vars(ppo_config), use_wandb=False)
+            device = get_device("cuda:0")
+            ppo: PPO = PPO(
+                train_corpus, val_corpus, CURRENT_DIR / "model_grammar",
+                writer, device,
+                ppo_config,
+                n_gram=None,
+            )
+            ppo.learn(10000000)
 
-        actor_critic = ppo.actor_critic
+            actor_critic = ppo.actor_critic
+
+            actor_critic_bsf_path = CURRENT_DIR / "model_grammar" / "torch" / f"actor_critic_bsf.pth"
+            destination_bsf = CURRENT_DIR / "model_grammar" / f"actor_critic_bsf_{i}.pth"
+            shutil.copy(actor_critic_bsf_path, destination_bsf)
 
         output_dir = CURRENT_DIR / "model_grammar"
         output_path = output_dir / f"model_cfg_{i}.txt"

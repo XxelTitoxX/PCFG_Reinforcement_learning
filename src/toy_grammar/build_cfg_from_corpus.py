@@ -21,11 +21,69 @@ def preprocess_rule_count(rule_count: DefaultDict[tuple[str], int]):
 
     print(f"Binary rule frequencies: {binary_frequencies}")
 
+def top_k_rules(rule_count: DefaultDict[tuple[str], int], k: int) -> DefaultDict[tuple[str], int]:
+    # Group n-ary rules by LHS
+    lhs_to_rules = defaultdict(list)
+    for rule, count in rule_count.items():
+        if len(rule) >= 3:
+            lhs = rule[0]  # first element is LHS
+            lhs_to_rules[lhs].append((rule, count))
+    top_rules : dict[tuple[str], int] = {}
+
+    # Select top k rules for each LHS
+    for lhs, rules in lhs_to_rules.items():
+        # Sort descending by count
+        rules_sorted = sorted(rules, key=lambda x: x[1], reverse=True)
+        # Keep only top k
+        for rule, count in rules_sorted[:k]:
+            top_rules[rule] = count
+
+    # Include unary rules in the final result
+    for rule, count in rule_count.items():
+        if len(rule) < 3:
+            top_rules[rule] = count
+    
+    return top_rules
+
+def cum_p_rules(rule_count: DefaultDict[tuple[str], int], p: float) -> DefaultDict[tuple[str], int]:
+    """
+    Selects the minimum top rules for each LHS that cumulatively cover at least p probability mass.
+    """
+    # Group n-ary rules by LHS
+    lhs_to_rules = defaultdict(list)
+    for rule, count in rule_count.items():
+        if len(rule) >= 3:
+            lhs = rule[0]  # first element is LHS
+            lhs_to_rules[lhs].append((rule, count))
+    top_rules : dict[tuple[str], int] = {}
+
+    # Select top rules for each LHS
+    for lhs, rules in lhs_to_rules.items():
+        # Sort descending by count
+        rules_sorted = sorted(rules, key=lambda x: x[1], reverse=True)
+        total_count = sum(c for r, c in rules_sorted)
+        cum_prob = 0.0
+        # Select rules until cumulative probability >= p
+        for rule, count in rules_sorted:
+            if cum_prob >= p:
+                break
+            cum_prob += count / total_count
+            top_rules[rule] = count
+
+    # Include unary rules in the final result
+    for rule, count in rule_count.items():
+        if len(rule) < 3:
+            top_rules[rule] = count
+    
+    return top_rules
+
 def rule_count_to_cfg(rule_count: DefaultDict[tuple[str], int]) -> str:
     """
     Converts a rule count dictionary to a string representation of a nltk.CFG.
     """
     #preprocess_rule_count(rule_count)
+    #rule_count = top_k_rules(rule_count, k=15)
+    rule_count = cum_p_rules(rule_count, p=0.85)
     def wrap_terminals(symbol: str) -> str:
         if symbol[:2] == 'TT':
             return f"'{symbol}'"
@@ -81,7 +139,7 @@ def parse_sentences(actor_critic: ActorCritic, batch_sentences: list[Sentence], 
         curr_nd_mask = curr_mask[not_done]
 
         current_nd_states = current_states[not_done]
-        position, position_log_prob, symbol, symbol_log_prob, state_value = actor_critic.act(current_nd_states, curr_nd_mask, max_prob=True)
+        position, position_log_prob, symbol, symbol_log_prob, state_value = actor_critic.act(current_nd_states, curr_nd_mask)
         sum_log_probs[not_done] += position_log_prob + symbol_log_prob
 
         update_position, update_symbol = position, symbol

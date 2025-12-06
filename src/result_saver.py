@@ -94,11 +94,11 @@ class ResultSaver:
             self.valid_env.rollout(actor_critic, valid_sentences, evaluate=True)
             train_f1: float = torch.mean(self.train_f1_criterion.score_sentences(self.train_env)).item()
             valid_f1: float = torch.mean(self.valid_f1_criterion.score_sentences(self.valid_env)).item()
-            if valid_f1 >= self.valid_f1_criterion.opt_score:
-                self.save_opt_model(actor_critic)
 
             train_labelled_f1: float = torch.mean(self.train_labelled_f1_criterion.score_sentences(self.train_env)).item()
             valid_labelled_f1: float = torch.mean(self.valid_labelled_f1_criterion.score_sentences(self.valid_env)).item()
+            if valid_labelled_f1 >= self.valid_labelled_f1_criterion.opt_score:
+                self.save_opt_model(actor_critic)
 
             train_prob: float = torch.mean(self.train_probability_criterion.score_sentences(self.train_env)).item()
             valid_prob: float = torch.mean(self.valid_probability_criterion.score_sentences(self.valid_env)).item()
@@ -111,7 +111,7 @@ class ResultSaver:
                 valid_f1=valid_f1, valid_labelled_f1=valid_labelled_f1, valid_prob=valid_prob, valid_cov=valid_cov,
                 #len=len(binary_grammar), binary_grammar=binary_grammar
             )
-            print(f"ITER: {i_so_far}, train_f1: {train_f1:.5f}, valid_f1: {valid_f1:.5f}")
+            print(f"ITER: {i_so_far}, train_f1: {train_f1:.5f}, valid_f1: {valid_f1:.5f}, train_labelled_f1: {train_labelled_f1:.5f}, valid_labelled_f1: {valid_labelled_f1:.5f}")
             logger.info(f"saving name: {name}, i_so_far: {i_so_far} result: {result}")
 
             path: Path = self.persistent_dir / "result" / f"{i_so_far}_{name}.json"
